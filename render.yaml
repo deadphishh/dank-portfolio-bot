@@ -1,0 +1,11 @@
+services:
+  - type: worker          # background worker, not a web server
+    name: portfolio-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: DISCORD_BOT_TOKEN
+        sync: false       # set manually in Render dashboard
+      - key: DISCORD_ALERT_CHANNEL_ID
+        sync: false       # set manually in Render dashboard

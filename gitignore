@@ -1,0 +1,11 @@
+# Never commit these
+portfolio.json
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
