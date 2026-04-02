@@ -134,7 +134,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Liq. Price:  ${liq_price:,.4f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck out there, degen 🎰"
+            f"Good luck, faggot 🎰"
         )
 
 
