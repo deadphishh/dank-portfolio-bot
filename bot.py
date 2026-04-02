@@ -4,7 +4,7 @@ from discord.ext import tasks
 import json
 import os
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from price_fetcher import get_price
 from portfolio import (
     load_portfolio, save_portfolio,
@@ -17,8 +17,8 @@ from portfolio import (
 # ── Config ──────────────────────────────────────────────────────────────────
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 ALERT_CHANNEL_ID   = int(os.getenv("DISCORD_ALERT_CHANNEL_ID", "0"))  # ID of your #alerts channel
-GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
-PORTFOLIO_FILE = "portfolio.json"
+PORTFOLIO_FILE    = "portfolio.json"
+PRICE_ALERTS_FILE = "price_alerts.json"
 
 # P&L milestones to alert on (in percent, both positive and negative)
 PNL_MILESTONES = [10, 25, 50, 75, 100, 125, 150, 200]
@@ -134,7 +134,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Liq. Price:  ${liq_price:,.4f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck, faggot 🎰"
+            f"Good luck out there, degen 🎰"
         )
 
 
@@ -382,87 +382,6 @@ async def before_monitor():
     await client.wait_until_ready()
 
 
-# ── Roast Command ────────────────────────────────────────────────────────────
-@tree.command(name="roast", description="Roast another user's positions with AI")
-@app_commands.describe(user="The user you want to roast")
-async def roast_cmd(interaction: discord.Interaction, user: discord.Member):
-    await interaction.response.defer(thinking=True)
-
-    if not GROQ_API_KEY:
-        await interaction.followup.send("❌ GROQ_API_KEY not set in environment variables.")
-        return
-
-    portfolio = load_portfolio(PORTFOLIO_FILE)
-    positions = get_user_positions(portfolio, str(user.id))
-
-    if not positions:
-        await interaction.followup.send(
-            f"📭 **{user.display_name}** has no open positions to roast. "
-            f"They're too scared to even be in the market. 🐔"
-        )
-        return
-
-    # Fetch live prices and build position summary for Claude
-    position_lines = []
-    for pos in positions:
-        price = await get_price(pos["ticker"], pos["asset_type"])
-        if price:
-            pnl = calculate_pnl(pos["entry_price"], price, pos["leverage"], pos["direction"])
-            pnl_str = f"{'+' if pnl >= 0 else ''}{pnl:.2f}%"
-            liq = pos["liquidation_price"]
-            liq_distance = abs((price - liq) / price * 100) if liq else None
-            liq_str = f"{liq_distance:.1f}% from liquidation" if liq_distance else "unknown liq distance"
-            position_lines.append(
-                f"- {pos['ticker']} {pos['direction'].upper()} {pos['leverage']}x | "
-                f"Entry: ${pos['entry_price']:,.4f} | Current: ${price:,.4f} | "
-                f"P&L: {pnl_str} | Liq: ${liq:,.4f} ({liq_str})"
-            )
-        else:
-            position_lines.append(
-                f"- {pos['ticker']} {pos['direction'].upper()} {pos['leverage']}x | "
-                f"Entry: ${pos['entry_price']:,.4f} | Price unavailable"
-            )
-
-    positions_text = "\n".join(position_lines)
-    username = user.display_name
-
-    prompt = f"""You are the most unhinged, degenerate trading roast bot on the internet. You talk like a terminally online crypto degen who has blown up 6 accounts, been liquidated on Christmas morning, and still thinks they're a genius. You roast with the energy of a group chat where everyone talks shit to each other because they're close friends — go hard, be ruthless, be filthy. Use heavy profanity freely — fuck, shit, ass, bastard, dickhead, dipshit, etc. Use them naturally and often. Use trading slang, memes, and pure savagery. Reference their specific positions, leverage, liquidation prices, and P&L to make it personal and cutting. If they're close to liquidation, absolutely destroy them for it. If they're up, accuse them of being a lucky idiot about to blow it. If they're down, pile on mercilessly. Be creative, be vile, be funny as hell. 5-6 sentences max. Go absolutely unhinged.
-
-{username}'s positions:
-{positions_text}
-
-Destroy them:"""
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "llama3-70b-8192",
-                    "max_tokens": 300,
-                    "messages": [{"role": "user", "content": prompt}]
-                },
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    roast_text = data["choices"][0]["message"]["content"].strip()
-                    await interaction.followup.send(
-                        f"🤡 **Roasting {user.mention}...**\n\n{roast_text}"
-                    )
-                else:
-                    body = await resp.text()
-                    await interaction.followup.send(f"❌ Groq API error: {resp.status}")
-                    print(f"[Roast API error] {resp.status}: {body}")
-    except Exception as e:
-        await interaction.followup.send("❌ Failed to generate roast. Even the AI is too disgusted to respond.")
-        print(f"[Roast exception] {e}")
-
-
 # ── Leaderboard Command ──────────────────────────────────────────────────────
 @tree.command(name="leaderboard", description="Top 10 most profitable trades of all time")
 async def leaderboard_cmd(interaction: discord.Interaction):
@@ -546,11 +465,380 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 
+
+# ── Price Alerts Helpers ──────────────────────────────────────────────────────
+def load_price_alerts() -> list:
+    if not os.path.exists(PRICE_ALERTS_FILE):
+        return []
+    with open(PRICE_ALERTS_FILE, "r") as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return []
+
+def save_price_alerts(alerts: list) -> None:
+    with open(PRICE_ALERTS_FILE, "w") as f:
+        json.dump(alerts, f, indent=2)
+
+
+# ── /mypositions ──────────────────────────────────────────────────────────────
+@tree.command(name="mypositions", description="View only your own open positions (private)")
+async def mypositions_cmd(interaction: discord.Interaction):
+    portfolio = load_portfolio(PORTFOLIO_FILE)
+    positions = get_user_positions(portfolio, str(interaction.user.id))
+    if not positions:
+        await interaction.response.send_message("📭 You have no open positions.", ephemeral=True)
+        return
+
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    lines = ["📊 **Your Open Positions**\n"]
+    for i, pos in enumerate(positions):
+        price = await get_price(pos["ticker"], pos["asset_type"])
+        if price is None:
+            price_display = "N/A"
+            pnl_str = "N/A"
+        else:
+            pnl = calculate_pnl(pos["entry_price"], price, pos["leverage"], pos["direction"])
+            pnl_str = f"{'+' if pnl >= 0 else ''}{pnl:.2f}%"
+            price_display = f"${price:,.4f}"
+        direction_emoji = "📈" if pos["direction"] == "long" else "📉"
+        lines.append(
+            f"**#{i+1} {direction_emoji} {pos['ticker']}** — "
+            f"{pos['direction'].upper()} {pos['leverage']}x\n"
+            f"  Entry: ${pos['entry_price']:,.4f} | Current: {price_display} | "
+            f"P&L: **{pnl_str}** | Liq: ${pos['liquidation_price']:,.4f}\n"
+        )
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+# ── /history ──────────────────────────────────────────────────────────────────
+@tree.command(name="history", description="View your closed trade history and realized P&L")
+async def history_cmd(interaction: discord.Interaction):
+    portfolio = load_portfolio(PORTFOLIO_FILE)
+    history = [h for h in portfolio.get("history", []) if h.get("user_id") == str(interaction.user.id)]
+    if not history:
+        await interaction.response.send_message("📭 You have no closed trades yet.", ephemeral=True)
+        return
+
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    total_pnl = sum(h["pnl"] for h in history)
+    wins = sum(1 for h in history if h["pnl"] > 0)
+    losses = len(history) - wins
+    win_rate = (wins / len(history)) * 100
+
+    embed = discord.Embed(
+        title=f"📒 {interaction.user.display_name}'s Trade History",
+        color=discord.Color.blurple(),
+        timestamp=datetime.utcnow()
+    )
+    embed.add_field(
+        name="📊 Summary",
+        value=(
+            f"Total Trades: **{len(history)}**\n"
+            f"Wins: **{wins}** | Losses: **{losses}**\n"
+            f"Win Rate: **{win_rate:.1f}%**\n"
+            f"Total Realized P&L: **{'+' if total_pnl >= 0 else ''}{total_pnl:.2f}%**"
+        ),
+        inline=False
+    )
+    for h in history[-10:]:  # show last 10 trades
+        try:
+            closed = datetime.fromisoformat(h["closed_at"]).strftime("%b %d, %Y")
+        except Exception:
+            closed = "Unknown"
+        pnl_emoji = "🟢" if h["pnl"] >= 0 else "🔴"
+        direction_emoji = "📈" if h["direction"] == "long" else "📉"
+        embed.add_field(
+            name=f"{direction_emoji} {h['ticker']} {h['direction'].upper()} {h['leverage']}x",
+            value=(
+                f"{pnl_emoji} **{'+' if h['pnl'] >= 0 else ''}{h['pnl']:.2f}%**\n"
+                f"Entry: ${h['entry_price']:,.4f} → ${h['exit_price']:,.4f}\n"
+                f"Closed: {closed}"
+            ),
+            inline=True
+        )
+    embed.set_footer(text="Showing last 10 closed trades")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+# ── /stats ────────────────────────────────────────────────────────────────────
+@tree.command(name="stats", description="View trading stats for a user")
+@app_commands.describe(user="The user to view stats for")
+async def stats_cmd(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(thinking=True)
+    portfolio = load_portfolio(PORTFOLIO_FILE)
+    history = [h for h in portfolio.get("history", []) if h.get("user_id") == str(user.id)]
+    open_positions = get_user_positions(portfolio, str(user.id))
+
+    if not history and not open_positions:
+        await interaction.followup.send(f"📭 **{user.display_name}** has no trading activity yet.")
+        return
+
+    # Closed trade stats
+    total_closed = len(history)
+    wins = sum(1 for h in history if h["pnl"] > 0)
+    losses = total_closed - wins
+    win_rate = (wins / total_closed * 100) if total_closed else 0
+    total_realized = sum(h["pnl"] for h in history)
+    best_trade = max(history, key=lambda x: x["pnl"]) if history else None
+    worst_trade = min(history, key=lambda x: x["pnl"]) if history else None
+    avg_leverage = sum(h["leverage"] for h in history) / total_closed if total_closed else 0
+
+    # Open position stats
+    total_unrealized = 0
+    valid_open = 0
+    for pos in open_positions:
+        price = await get_price(pos["ticker"], pos["asset_type"])
+        if price:
+            pnl = calculate_pnl(pos["entry_price"], price, pos["leverage"], pos["direction"])
+            total_unrealized += pnl
+            valid_open += 1
+
+    embed = discord.Embed(
+        title=f"📈 {user.display_name}'s Trading Stats",
+        color=discord.Color.gold(),
+        timestamp=datetime.utcnow()
+    )
+    embed.set_thumbnail(url=user.display_avatar.url)
+
+    embed.add_field(
+        name="📊 All-Time Record",
+        value=(
+            f"Closed Trades: **{total_closed}**\n"
+            f"Wins: **{wins}** | Losses: **{losses}**\n"
+            f"Win Rate: **{win_rate:.1f}%**\n"
+            f"Avg Leverage: **{avg_leverage:.1f}x**"
+        ),
+        inline=True
+    )
+    embed.add_field(
+        name="💰 P&L",
+        value=(
+            f"Realized: **{'+' if total_realized >= 0 else ''}{total_realized:.2f}%**\n"
+            f"Unrealized: **{'+' if total_unrealized >= 0 else ''}{total_unrealized:.2f}%** ({valid_open} open)\n"
+        ),
+        inline=True
+    )
+    if best_trade:
+        embed.add_field(
+            name="🚀 Best Trade",
+            value=f"{best_trade['ticker']} {best_trade['direction'].upper()} {best_trade['leverage']}x\n**+{best_trade['pnl']:.2f}%**",
+            inline=True
+        )
+    if worst_trade:
+        embed.add_field(
+            name="💀 Worst Trade",
+            value=f"{worst_trade['ticker']} {worst_trade['direction'].upper()} {worst_trade['leverage']}x\n**{worst_trade['pnl']:.2f}%**",
+            inline=True
+        )
+    await interaction.followup.send(embed=embed)
+
+
+# ── /alert ────────────────────────────────────────────────────────────────────
+alert_group = app_commands.Group(name="alert", description="Manage price alerts")
+
+@alert_group.command(name="set", description="Set a price alert for a ticker")
+@app_commands.describe(ticker="Ticker symbol e.g. BTC, AAPL", asset_type="crypto or stock", target_price="Price to alert at")
+async def alert_set(interaction: discord.Interaction, ticker: str, asset_type: str, target_price: float):
+    asset_type = asset_type.strip().lower()
+    if asset_type not in ("crypto", "stock"):
+        await interaction.response.send_message("❌ Asset type must be **crypto** or **stock**.", ephemeral=True)
+        return
+
+    alerts = load_price_alerts()
+    alerts.append({
+        "user_id":      str(interaction.user.id),
+        "username":     interaction.user.display_name,
+        "ticker":       ticker.upper(),
+        "asset_type":   asset_type,
+        "target_price": target_price,
+        "created_at":   datetime.utcnow().isoformat(),
+        "triggered":    False
+    })
+    save_price_alerts(alerts)
+    await interaction.response.send_message(
+        f"🔔 Alert set! I'll ping you in the channel when **{ticker.upper()}** hits **${target_price:,.4f}**.",
+        ephemeral=True
+    )
+
+@alert_group.command(name="list", description="View your active price alerts")
+async def alert_list(interaction: discord.Interaction):
+    alerts = [a for a in load_price_alerts() if a["user_id"] == str(interaction.user.id) and not a["triggered"]]
+    if not alerts:
+        await interaction.response.send_message("📭 You have no active price alerts.", ephemeral=True)
+        return
+    lines = ["🔔 **Your Active Price Alerts**\n"]
+    for i, a in enumerate(alerts):
+        lines.append(f"**#{i+1}** {a['ticker']} — target: **${a['target_price']:,.4f}**")
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+@alert_group.command(name="remove", description="Remove one of your price alerts")
+@app_commands.describe(index="Alert number from /alert list")
+async def alert_remove(interaction: discord.Interaction, index: int):
+    all_alerts = load_price_alerts()
+    user_alerts = [a for a in all_alerts if a["user_id"] == str(interaction.user.id) and not a["triggered"]]
+    if not user_alerts or index < 1 or index > len(user_alerts):
+        await interaction.response.send_message("❌ Invalid alert number. Use /alert list to see yours.", ephemeral=True)
+        return
+    target = user_alerts[index - 1]
+    all_alerts.remove(target)
+    save_price_alerts(all_alerts)
+    await interaction.response.send_message(
+        f"✅ Removed alert for **{target['ticker']}** at **${target['target_price']:,.4f}**.", ephemeral=True
+    )
+
+tree.add_command(alert_group)
+
+
+# ── Price Alert Monitor ───────────────────────────────────────────────────────
+@tasks.loop(minutes=5)
+async def monitor_price_alerts():
+    alerts = load_price_alerts()
+    if not alerts:
+        return
+
+    changed = False
+    channel = client.get_channel(ALERT_CHANNEL_ID)
+    if channel is None:
+        return
+
+    for alert in alerts:
+        if alert.get("triggered"):
+            continue
+        price = await get_price(alert["ticker"], alert["asset_type"])
+        if price is None:
+            continue
+        target = alert["target_price"]
+        # Trigger if price crosses target in either direction
+        if price >= target:
+            try:
+                await channel.send(
+                    f"🔔 **Price Alert!** <@{alert['user_id']}> — "
+                    f"**{alert['ticker']}** has hit your target of **${target:,.4f}**!\n"
+                    f"Current price: **${price:,.4f}**"
+                )
+            except Exception:
+                pass
+            alert["triggered"] = True
+            changed = True
+
+    if changed:
+        save_price_alerts(alerts)
+
+
+# ── Weekly Recap ──────────────────────────────────────────────────────────────
+@tasks.loop(minutes=1)
+async def weekly_recap():
+    now = datetime.now(timezone.utc)
+    # Fire on Sunday at 8pm ET (UTC-4 in summer / UTC-5 in winter, use UTC 00:00 Monday ≈ Sunday 8pm ET)
+    # We target Sunday = weekday 6, at 23:55-00:00 UTC (~ 7-8pm ET)
+    if now.weekday() != 6 or now.hour != 23 or now.minute != 55:
+        return
+
+    channel = client.get_channel(ALERT_CHANNEL_ID)
+    if channel is None:
+        return
+
+    portfolio = load_portfolio(PORTFOLIO_FILE)
+    history = portfolio.get("history", [])
+
+    # Filter to trades closed this past week
+    week_ago = now - timedelta(days=7)
+    week_trades = []
+    for h in history:
+        try:
+            closed_at = datetime.fromisoformat(h["closed_at"]).replace(tzinfo=timezone.utc)
+            if closed_at >= week_ago:
+                week_trades.append(h)
+        except Exception:
+            continue
+
+    # Also include open positions with live P&L
+    open_entries = []
+    for user_id, positions in get_all_positions(portfolio).items():
+        user = client.get_user(int(user_id))
+        if user is None:
+            try:
+                user = await client.fetch_user(int(user_id))
+                uname = user.display_name
+            except Exception:
+                uname = f"User {user_id}"
+        else:
+            uname = user.display_name
+        for pos in positions:
+            price = await get_price(pos["ticker"], pos["asset_type"])
+            if price:
+                pnl = calculate_pnl(pos["entry_price"], price, pos["leverage"], pos["direction"])
+                open_entries.append({
+                    "username": uname,
+                    "user_id": user_id,
+                    "ticker": pos["ticker"],
+                    "direction": pos["direction"],
+                    "leverage": pos["leverage"],
+                    "pnl": pnl,
+                    "status": "open"
+                })
+
+    all_week = week_trades + open_entries
+    if not all_week:
+        await channel.send("📊 **Weekly Recap** — No trades this week. Everyone's a coward. 🐔")
+        return
+
+    best = max(all_week, key=lambda x: x["pnl"])
+    worst = min(all_week, key=lambda x: x["pnl"])
+
+    # Most active trader (most closed trades this week)
+    from collections import Counter
+    trader_counts = Counter(h["username"] for h in week_trades)
+    most_active = trader_counts.most_common(1)[0] if trader_counts else None
+
+    # Highest leverage used
+    all_leverages = week_trades + open_entries
+    max_lev_trade = max(all_leverages, key=lambda x: x["leverage"]) if all_leverages else None
+
+    embed = discord.Embed(
+        title="📊 Weekly Trading Recap",
+        description=f"Week ending {now.strftime('%B %d, %Y')}",
+        color=discord.Color.gold(),
+        timestamp=now
+    )
+    embed.add_field(
+        name="🚀 Biggest Winner",
+        value=f"**{best['username']}** — {best['ticker']} {best['direction'].upper()} {best['leverage']}x\n**{'+' if best['pnl'] >= 0 else ''}{best['pnl']:.2f}%**",
+        inline=True
+    )
+    embed.add_field(
+        name="💀 Biggest Loser",
+        value=f"**{worst['username']}** — {worst['ticker']} {worst['direction'].upper()} {worst['leverage']}x\n**{'+' if worst['pnl'] >= 0 else ''}{worst['pnl']:.2f}%**",
+        inline=True
+    )
+    if most_active:
+        embed.add_field(
+            name="🏃 Most Active",
+            value=f"**{most_active[0]}** — {most_active[1]} trade(s) closed",
+            inline=True
+        )
+    if max_lev_trade:
+        embed.add_field(
+            name="🎰 Most Degenerate",
+            value=f"**{max_lev_trade['username']}** — {max_lev_trade['ticker']} at **{max_lev_trade['leverage']}x** leverage",
+            inline=True
+        )
+    embed.add_field(
+        name="📈 Total Activity",
+        value=f"Closed trades this week: **{len(week_trades)}**\nOpen positions: **{len(open_entries)}**",
+        inline=False
+    )
+    await channel.send(embed=embed)
+
+
 # ── Bot Events ───────────────────────────────────────────────────────────────
 @client.event
 async def on_ready():
     await tree.sync()
     monitor_positions.start()
+    monitor_price_alerts.start()
+    weekly_recap.start()
     print(f"✅ Logged in as {client.user} | Monitoring every 5 minutes")
 
 
