@@ -128,7 +128,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
         await interaction.followup.send(
             f"{direction_emoji} **Position opened!**\n"
             f"```\n"
-            f"Ticker:      {ticker_val} ({asset_type_val})\n"
+            f"Ticker:      {ticker_val}\n"
             f"Direction:   {direction_val.upper()} {lev}x\n"
             f"Entry Price: ${entry:,.4f}\n"
             f"Liq. Price:  ${liq_price:,.4f}\n"
@@ -181,7 +181,7 @@ async def positions_cmd(interaction: discord.Interaction):
 
             direction_emoji = "📈" if pos["direction"] == "long" else "📉"
             lines.append(
-                f"**#{counter} {direction_emoji} {pos['ticker']}** ({pos['asset_type']}) — "
+                f"**#{counter} {direction_emoji} {pos['ticker']}** — "
                 f"{pos['direction'].upper()} {pos['leverage']}x | **{username}**\n"
                 f"  Entry: ${pos['entry_price']:,.4f} | Current: {price_display} | "
                 f"P&L: **{pnl_str}** | Liq: ${pos['liquidation_price']:,.4f}\n"
@@ -236,7 +236,7 @@ async def portfolio_cmd(interaction: discord.Interaction):
             )
         direction_emoji = "📈" if pos["direction"] == "long" else "📉"
         embed.add_field(
-            name=f"#{i+1} {direction_emoji} {pos['ticker']} ({pos['asset_type']})",
+            name=f"#{i+1} {direction_emoji} {pos['ticker']}",
             value=field_val,
             inline=True
         )
