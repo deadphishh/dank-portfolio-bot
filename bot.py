@@ -16,7 +16,6 @@ from portfolio import (
 # ── Config ──────────────────────────────────────────────────────────────────
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 ALERT_CHANNEL_ID = int(os.getenv("DISCORD_ALERT_CHANNEL_ID", "0"))  # ID of your #alerts channel
-LOG_CHANNEL_ID   = int(os.getenv("DISCORD_LOG_CHANNEL_ID", "0"))    # ID of your #bot-logs channel
 PORTFOLIO_FILE = "portfolio.json"
 
 # P&L milestones to alert on (in percent, both positive and negative)
@@ -64,9 +63,9 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Defer immediately — Discord requires a response within 3 seconds,
-        # and price fetching can take longer than that.
-        await interaction.response.defer()
+        # Defer immediately with thinking=True — tells Discord to show a
+        # loading state and wait indefinitely for our followup response.
+        await interaction.response.defer(thinking=True)
 
         # Validate inputs
         asset_type_val = self.asset_type.value.strip().lower()
@@ -99,7 +98,6 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
         # Verify the ticker resolves to a real price
         price = await get_price(ticker_val, asset_type_val)
         if price is None:
-            await log(f"[price fetch failed] ticker={ticker_val} type={asset_type_val} user={interaction.user}")
             await interaction.followup.send(
                 f"❌ Could not fetch a price for **{ticker_val}** ({asset_type_val}). "
                 "Double-check the ticker symbol.", ephemeral=True
@@ -134,7 +132,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Liq. Price:  ${liq_price:,.4f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck out there, degen 🎰"
+            f"Good luck, faggot 🎰"
         )
 
 
@@ -289,24 +287,6 @@ async def send_alert(message: str):
         print(f"[ALERT — missing permissions] {message}")
 
 
-# ── Log Helper ───────────────────────────────────────────────────────────────
-async def log(message: str):
-    """Post a debug message to the bot logs channel."""
-    print(message)  # always print to Railway console too
-    if LOG_CHANNEL_ID == 0:
-        return
-    channel = client.get_channel(LOG_CHANNEL_ID)
-    if channel is None:
-        try:
-            channel = await client.fetch_channel(LOG_CHANNEL_ID)
-        except Exception:
-            return
-    try:
-        await channel.send(f"`{message}`")
-    except Exception:
-        pass
-
-
 # ── Background Price Monitor ─────────────────────────────────────────────────
 @tasks.loop(minutes=5)
 async def monitor_positions():
@@ -383,18 +363,6 @@ async def on_ready():
     await tree.sync()
     monitor_positions.start()
     print(f"✅ Logged in as {client.user} | Monitoring every 5 minutes")
-    # Startup diagnostics — posts to #bot-logs so we can verify env vars are loaded
-    from price_fetcher import ALPACA_API_KEY, ALPACA_SECRET_KEY
-    alpaca_key_status = f"SET ({ALPACA_API_KEY[:6]}...)" if ALPACA_API_KEY else "❌ NOT SET"
-    alpaca_secret_status = "SET" if ALPACA_SECRET_KEY else "❌ NOT SET"
-    alert_ch = f"<#{ALERT_CHANNEL_ID}>" if ALERT_CHANNEL_ID else "❌ NOT SET"
-    await log(
-        f"Bot started: {client.user}\n"
-        f"ALPACA_API_KEY: {alpaca_key_status}\n"
-        f"ALPACA_SECRET_KEY: {alpaca_secret_status}\n"
-        f"ALERT_CHANNEL_ID: {alert_ch}\n"
-        f"LOG_CHANNEL_ID: {LOG_CHANNEL_ID if LOG_CHANNEL_ID else '❌ NOT SET'}"
-    )
 
 
 client.run(TOKEN)
