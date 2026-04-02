@@ -63,17 +63,21 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Defer immediately — Discord requires a response within 3 seconds,
+        # and price fetching can take longer than that.
+        await interaction.response.defer()
+
         # Validate inputs
         asset_type_val = self.asset_type.value.strip().lower()
         if asset_type_val not in ("crypto", "stock"):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Asset type must be **crypto** or **stock**.", ephemeral=True
             )
             return
 
         direction_val = self.direction.value.strip().lower()
         if direction_val not in ("long", "short"):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Direction must be **long** or **short**.", ephemeral=True
             )
             return
@@ -84,7 +88,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             if entry <= 0 or lev < 1:
                 raise ValueError
         except ValueError:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Entry price must be a positive number and leverage must be ≥ 1.", ephemeral=True
             )
             return
@@ -92,7 +96,6 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
         ticker_val = self.ticker.value.strip().upper()
 
         # Verify the ticker resolves to a real price
-        await interaction.response.defer()
         price = await get_price(ticker_val, asset_type_val)
         if price is None:
             await interaction.followup.send(
@@ -129,7 +132,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Liq. Price:  ${liq_price:,.4f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck, faggot 🎰"
+            f"Good luck out there, degen 🎰"
         )
 
 
