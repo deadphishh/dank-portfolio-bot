@@ -65,8 +65,8 @@ COINGECKO_ID_MAP = {
 }
 
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
-FETCH_TIMEOUT  = 8   # seconds — hard cap per price fetch
-HTTP_TIMEOUT   = aiohttp.ClientTimeout(total=6)
+FETCH_TIMEOUT  = 5   # seconds — must be well under Discord's 3s modal limit
+HTTP_TIMEOUT   = aiohttp.ClientTimeout(total=4)
 
 
 async def get_crypto_price(ticker: str) -> float | None:
@@ -121,43 +121,25 @@ async def get_stock_price(ticker: str) -> float | None:
 
     try:
         async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
-            # Try latest quote first (includes ask/bid for after-hours)
-            url = f"{ALPACA_BASE_URL}/stocks/{ticker}/quotes/latest?feed=iex"
-            async with session.get(url, headers=headers) as resp:
-                print(f"[Alpaca quote] {ticker} status={resp.status}")
-                if resp.status == 200:
-                    data = await resp.json()
-                    quote = data.get("quote", {})
-                    ask = quote.get("ap")
-                    bid = quote.get("bp")
-                    print(f"[Alpaca quote] {ticker} ask={ask} bid={bid}")
-                    if ask and ask > 0:
-                        return float(ask)
-                    if bid and bid > 0:
-                        return float(bid)
-                elif resp.status == 403:
-                    print(f"[Alpaca] 403 Forbidden — check ALPACA_API_KEY and ALPACA_SECRET_KEY in Railway variables")
-                    return None
-                elif resp.status == 422:
-                    print(f"[Alpaca] 422 Unprocessable — ticker '{ticker}' may not be supported on IEX feed")
-                    return None
-                else:
-                    body = await resp.text()
-                    print(f"[Alpaca quote error] {ticker} status={resp.status}: {body}")
-
-            # Fallback: latest trade price
-            url = f"{ALPACA_BASE_URL}/stocks/{ticker}/trades/latest?feed=iex"
-            async with session.get(url, headers=headers) as resp:
-                print(f"[Alpaca trade] {ticker} status={resp.status}")
-                if resp.status == 200:
-                    data = await resp.json()
-                    price = data.get("trade", {}).get("p")
-                    print(f"[Alpaca trade] {ticker} price={price}")
-                    if price:
-                        return float(price)
-                else:
-                    body = await resp.text()
-                    print(f"[Alpaca trade error] {ticker} status={resp.status}: {body}")
+            # Try SIP feed first (real-time, may require paid tier)
+            # Falls back to IEX (free but slightly delayed)
+            for feed in ("sip", "iex"):
+                url = f"{ALPACA_BASE_URL}/stocks/{ticker}/trades/latest?feed={feed}"
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        price = data.get("trade", {}).get("p")
+                        if price and float(price) > 0:
+                            return float(price)
+                    elif resp.status == 403 and feed == "sip":
+                        # No SIP access, will try IEX next
+                        continue
+                    elif resp.status == 403 and feed == "iex":
+                        print(f"[Alpaca] 403 Forbidden — check API keys in Railway variables")
+                        return None
+                    elif resp.status == 422:
+                        print(f"[Alpaca] 422 — ticker '{ticker}' not supported")
+                        return None
 
     except Exception as e:
         print(f"[Alpaca exception] {ticker}: {e}")
