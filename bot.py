@@ -17,7 +17,7 @@ from portfolio import (
 # ── Config ──────────────────────────────────────────────────────────────────
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 ALERT_CHANNEL_ID   = int(os.getenv("DISCORD_ALERT_CHANNEL_ID", "0"))  # ID of your #alerts channel
-ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
+GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
 PORTFOLIO_FILE = "portfolio.json"
 
 # P&L milestones to alert on (in percent, both positive and negative)
@@ -388,8 +388,8 @@ async def before_monitor():
 async def roast_cmd(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.defer()
 
-    if not ANTHROPIC_API_KEY:
-        await interaction.followup.send("❌ ANTHROPIC_API_KEY not set in environment variables.")
+    if not GROQ_API_KEY:
+        await interaction.followup.send("❌ GROQ_API_KEY not set in environment variables.")
         return
 
     portfolio = load_portfolio(PORTFOLIO_FILE)
@@ -436,14 +436,13 @@ Destroy them:"""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                "https://api.anthropic.com/v1/messages",
+                "https://api.groq.com/openai/v1/chat/completions",
                 headers={
-                    "x-api-key": ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
                 },
                 json={
-                    "model": "claude-sonnet-4-20250514",
+                    "model": "llama3-70b-8192",
                     "max_tokens": 300,
                     "messages": [{"role": "user", "content": prompt}]
                 },
@@ -451,16 +450,16 @@ Destroy them:"""
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    roast_text = data["content"][0]["text"].strip()
+                    roast_text = data["choices"][0]["message"]["content"].strip()
                     await interaction.followup.send(
                         f"🤡 **Roasting {user.mention}...**\n\n{roast_text}"
                     )
                 else:
                     body = await resp.text()
-                    await interaction.followup.send(f"❌ Claude API error: {resp.status}")
+                    await interaction.followup.send(f"❌ Groq API error: {resp.status}")
                     print(f"[Roast API error] {resp.status}: {body}")
     except Exception as e:
-        await interaction.followup.send("❌ Failed to generate roast. Claude is probably also losing money.")
+        await interaction.followup.send("❌ Failed to generate roast. Even the AI is too disgusted to respond.")
         print(f"[Roast exception] {e}")
 
 
