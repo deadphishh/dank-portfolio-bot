@@ -134,7 +134,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Liq. Price:  ${liq_price:,.4f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck, faggot 🤡"
+            f"Good luck out there, degen 🎰"
         )
 
 
@@ -152,13 +152,18 @@ async def positions_cmd(interaction: discord.Interaction):
         return
 
     await interaction.response.defer(thinking=True)
-    lines = ["📊 **All Open Positions**\n"]
-    counter = 1
 
-    for user_id, positions in get_all_positions(portfolio).items():
+    all_positions = get_all_positions(portfolio)
+    total_positions = sum(len(p) for p in all_positions.values())
+    if total_positions == 0:
+        await interaction.followup.send("📭 No open positions in this server.")
+        return
+
+    # Fetch all prices and build sortable list first
+    entries = []
+    for user_id, positions in all_positions.items():
         if not positions:
             continue
-        # Resolve username
         user = client.get_user(int(user_id))
         if user is None:
             try:
@@ -172,27 +177,51 @@ async def positions_cmd(interaction: discord.Interaction):
         for pos in positions:
             price = await get_price(pos["ticker"], pos["asset_type"])
             if price is None:
+                pnl = None
                 price_display = "N/A"
                 pnl_str = "N/A"
+                pnl_emoji = "⬜"
             else:
                 pnl = calculate_pnl(pos["entry_price"], price, pos["leverage"], pos["direction"])
                 pnl_str = f"{'+' if pnl >= 0 else ''}{pnl:.2f}%"
+                pnl_emoji = "🟢" if pnl >= 0 else "🔴"
                 price_display = f"${price:,.4f}"
 
-            direction_emoji = "📈" if pos["direction"] == "long" else "📉"
-            lines.append(
-                f"**#{counter} {direction_emoji} {pos['ticker']}** — "
-                f"{pos['direction'].upper()} {pos['leverage']}x | **{username}**\n"
-                f"  Entry: ${pos['entry_price']:,.4f} | Current: {price_display} | "
-                f"P&L: **{pnl_str}** | Liq: ${pos['liquidation_price']:,.4f}\n"
-            )
-            counter += 1
+            entries.append({
+                "pos": pos,
+                "username": username,
+                "pnl": pnl if pnl is not None else float("-inf"),
+                "pnl_str": pnl_str,
+                "pnl_emoji": pnl_emoji,
+                "price_display": price_display,
+            })
 
-    if counter == 1:
-        await interaction.followup.send("📭 No open positions in this server.")
-        return
+    # Sort by P&L descending (best first)
+    entries.sort(key=lambda x: x["pnl"], reverse=True)
 
-    await interaction.followup.send("\n".join(lines))
+    embed = discord.Embed(
+        title="📊 All Open Positions",
+        color=0x2B2D31,
+        timestamp=datetime.utcnow()
+    )
+
+    for entry in entries:
+        pos = entry["pos"]
+        direction_emoji = "📈" if pos["direction"] == "long" else "📉"
+        embed.add_field(
+            name=f"{direction_emoji} {pos['ticker']} — {pos['direction'].upper()} {pos['leverage']}x",
+            value=(
+                f"👤 **{entry['username']}**\n"
+                f"Entry: `${pos['entry_price']:,.4f}`\n"
+                f"Current: `{entry['price_display']}`\n"
+                f"{entry['pnl_emoji']} P&L: **{entry['pnl_str']}**\n"
+                f"Liq: `${pos['liquidation_price']:,.4f}`"
+            ),
+            inline=True
+        )
+
+    embed.set_footer(text=f"{total_positions} open position(s) • sorted by P&L")
+    await interaction.followup.send(embed=embed)
 
 
 @tree.command(name="portfolio", description="View a detailed portfolio summary with P&L")
