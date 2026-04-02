@@ -151,7 +151,7 @@ async def positions_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("📭 No open positions in this server.")
         return
 
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
     lines = ["📊 **All Open Positions**\n"]
     counter = 1
 
@@ -203,7 +203,7 @@ async def portfolio_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("📭 You have no open positions.")
         return
 
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
 
     embed = discord.Embed(
         title=f"📊 {interaction.user.display_name}'s Portfolio",
@@ -265,7 +265,7 @@ async def close_cmd(interaction: discord.Interaction, index: int):
         )
         return
 
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
     pos = positions[idx]
     price = await get_price(pos["ticker"], pos["asset_type"])
     exit_price = price if price else pos["entry_price"]  # fallback to entry if price unavailable
@@ -386,7 +386,7 @@ async def before_monitor():
 @tree.command(name="roast", description="Roast another user's positions with AI")
 @app_commands.describe(user="The user you want to roast")
 async def roast_cmd(interaction: discord.Interaction, user: discord.Member):
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
 
     if not GROQ_API_KEY:
         await interaction.followup.send("❌ GROQ_API_KEY not set in environment variables.")
@@ -466,7 +466,7 @@ Destroy them:"""
 # ── Leaderboard Command ──────────────────────────────────────────────────────
 @tree.command(name="leaderboard", description="Top 10 most profitable trades of all time")
 async def leaderboard_cmd(interaction: discord.Interaction):
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
     portfolio = load_portfolio(PORTFOLIO_FILE)
 
     # Build entries from closed history
@@ -533,14 +533,10 @@ async def leaderboard_cmd(interaction: discord.Interaction):
         embed.add_field(
             name=f"{medals[i]} #{i+1} — {entry['ticker']} {direction_emoji} {entry['leverage']}x",
             value=(
-                f"**{pnl_str}** P&L
-"
-                f"👤 {entry['username']}
-"
-                f"Entry: ${entry['entry_price']:,.4f}
-"
-                f"Opened: {opened}
-"
+                f"**{pnl_str}** P&L\n"
+                f"👤 {entry['username']}\n"
+                f"Entry: ${entry['entry_price']:,.4f}\n"
+                f"Opened: {opened}\n"
                 f"{status}"
             ),
             inline=True
