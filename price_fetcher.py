@@ -9,6 +9,12 @@ Free price sources:
 import asyncio
 import aiohttp
 import yfinance as yf
+import time
+
+# Simple in-memory price cache — avoids hammering APIs during testing
+# and prevents CoinGecko rate limiting (429 errors)
+_price_cache: dict = {}  # { "BTC:crypto": (price, timestamp) }
+CACHE_TTL = 60  # seconds — reuse a cached price if it's less than 60s old
 
 # CoinGecko: map common ticker symbols to their CoinGecko IDs
 COINGECKO_ID_MAP = {
@@ -119,14 +125,26 @@ async def get_stock_price(ticker: str) -> float | None:
 
 async def get_price(ticker: str, asset_type: str) -> float | None:
     """
-    Unified price fetch with an overall hard timeout.
+    Unified price fetch with in-memory cache and hard timeout.
     asset_type: 'crypto' or 'stock'
     Returns float (USD) or None if unavailable or timed out.
     """
+    cache_key = f"{ticker.upper()}:{asset_type}"
+    cached = _price_cache.get(cache_key)
+    if cached:
+        price, ts = cached
+        if time.time() - ts < CACHE_TTL:
+            return price  # return cached price, skip API call
+
     try:
         if asset_type == "crypto":
-            return await asyncio.wait_for(get_crypto_price(ticker), timeout=FETCH_TIMEOUT)
+            price = await asyncio.wait_for(get_crypto_price(ticker), timeout=FETCH_TIMEOUT)
         else:
-            return await asyncio.wait_for(get_stock_price(ticker), timeout=FETCH_TIMEOUT)
+            price = await asyncio.wait_for(get_stock_price(ticker), timeout=FETCH_TIMEOUT)
     except asyncio.TimeoutError:
         return None
+
+    if price is not None:
+        _price_cache[cache_key] = (price, time.time())
+
+    return price
