@@ -2,19 +2,24 @@
 price_fetcher.py
 ─────────────────
 Free price sources:
-  • Stocks / ETFs / Equities → yfinance (Yahoo Finance, no API key)
+  • Stocks / ETFs / Equities → Alpaca Markets API (free, includes after-hours)
   • Crypto                   → CoinGecko free public API (no API key)
 """
 
 import asyncio
 import aiohttp
-import yfinance as yf
+import os
 import time
 
 # Simple in-memory price cache — avoids hammering APIs during testing
-# and prevents CoinGecko rate limiting (429 errors)
+# and prevents rate limiting
 _price_cache: dict = {}  # { "BTC:crypto": (price, timestamp) }
 CACHE_TTL = 60  # seconds — reuse a cached price if it's less than 60s old
+
+# Alpaca credentials — set these in Railway environment variables
+ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY", "")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
+ALPACA_BASE_URL   = "https://data.alpaca.markets/v2"
 
 # CoinGecko: map common ticker symbols to their CoinGecko IDs
 COINGECKO_ID_MAP = {
@@ -100,27 +105,45 @@ async def get_crypto_price(ticker: str) -> float | None:
 
 
 async def get_stock_price(ticker: str) -> float | None:
-    """Fetch stock/ETF/equity price via yfinance (Yahoo Finance, free, no key)."""
-    def _fetch():
-        try:
-            t = yf.Ticker(ticker)
-            price = getattr(t.fast_info, "last_price", None)
-            if price is None:
-                hist = t.history(period="1d")
-                if not hist.empty:
-                    price = float(hist["Close"].iloc[-1])
-            return price
-        except Exception:
-            return None
+    """
+    Fetch stock/ETF/equity price via Alpaca Markets API.
+    Includes pre-market and after-hours prices (feed=iex covers extended hours).
+    Falls back to latest trade if quote is unavailable.
+    """
+    headers = {
+        "APCA-API-KEY-ID":     ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
+    }
 
-    loop = asyncio.get_event_loop()
     try:
-        return await asyncio.wait_for(
-            loop.run_in_executor(None, _fetch),
-            timeout=FETCH_TIMEOUT
-        )
-    except asyncio.TimeoutError:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+            # Try latest quote first (includes ask/bid for after-hours)
+            url = f"{ALPACA_BASE_URL}/stocks/{ticker}/quotes/latest?feed=iex"
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    quote = data.get("quote", {})
+                    # Use ask price if available, otherwise bid, otherwise None
+                    ask = quote.get("ap")  # ask price
+                    bid = quote.get("bp")  # bid price
+                    if ask and ask > 0:
+                        return float(ask)
+                    if bid and bid > 0:
+                        return float(bid)
+
+            # Fallback: latest trade price
+            url = f"{ALPACA_BASE_URL}/stocks/{ticker}/trades/latest?feed=iex"
+            async with session.get(url, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    price = data.get("trade", {}).get("p")
+                    if price:
+                        return float(price)
+
+    except Exception:
         return None
+
+    return None
 
 
 async def get_price(ticker: str, asset_type: str) -> float | None:
