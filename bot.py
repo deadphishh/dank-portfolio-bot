@@ -92,7 +92,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
         ticker_val = self.ticker.value.strip().upper()
 
         # Verify the ticker resolves to a real price
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
         price = await get_price(ticker_val, asset_type_val)
         if price is None:
             await interaction.followup.send(
@@ -128,8 +128,8 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Entry Price: ${entry:,.4f}\n"
             f"Liq. Price:  ${liq_price:,.4f}\n"
             f"Current:     ${price:,.4f}\n"
-            f"```",
-            ephemeral=True
+            f"```\n"
+            f"Good luck, faggot 🎰"
         )
 
 
@@ -144,10 +144,10 @@ async def positions_cmd(interaction: discord.Interaction):
     portfolio = load_portfolio(PORTFOLIO_FILE)
     positions = get_user_positions(portfolio, str(interaction.user.id))
     if not positions:
-        await interaction.response.send_message("📭 You have no open positions.", ephemeral=True)
+        await interaction.response.send_message("📭 You have no open positions.")
         return
 
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
     lines = [f"📊 **{interaction.user.display_name}'s Open Positions**\n"]
 
     for i, pos in enumerate(positions):
@@ -167,7 +167,7 @@ async def positions_cmd(interaction: discord.Interaction):
             f"P&L: **{pnl_str}** | Liq: ${pos['liquidation_price']:,.4f}\n"
         )
 
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
+    await interaction.followup.send("\n".join(lines))
 
 
 @tree.command(name="portfolio", description="View a detailed portfolio summary with P&L")
@@ -175,10 +175,10 @@ async def portfolio_cmd(interaction: discord.Interaction):
     portfolio = load_portfolio(PORTFOLIO_FILE)
     positions = get_user_positions(portfolio, str(interaction.user.id))
     if not positions:
-        await interaction.response.send_message("📭 You have no open positions.", ephemeral=True)
+        await interaction.response.send_message("📭 You have no open positions.")
         return
 
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
 
     embed = discord.Embed(
         title=f"📊 {interaction.user.display_name}'s Portfolio",
@@ -220,7 +220,7 @@ async def portfolio_cmd(interaction: discord.Interaction):
         avg_pnl = total_weighted_pnl / valid_count
         embed.set_footer(text=f"Avg P&L across {valid_count} position(s): {'+' if avg_pnl >= 0 else ''}{avg_pnl:.2f}%")
 
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed)
 
 
 @tree.command(name="close", description="Close one of your open positions by index")
@@ -229,7 +229,7 @@ async def close_cmd(interaction: discord.Interaction, index: int):
     portfolio = load_portfolio(PORTFOLIO_FILE)
     positions = get_user_positions(portfolio, str(interaction.user.id))
     if not positions:
-        await interaction.response.send_message("📭 You have no open positions to close.", ephemeral=True)
+        await interaction.response.send_message("📭 You have no open positions to close.")
         return
 
     idx = index - 1
@@ -240,7 +240,7 @@ async def close_cmd(interaction: discord.Interaction, index: int):
         )
         return
 
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
     pos = positions[idx]
     price = await get_price(pos["ticker"], pos["asset_type"])
 
@@ -257,12 +257,11 @@ async def close_cmd(interaction: discord.Interaction, index: int):
             f"Entry:     ${pos['entry_price']:,.4f}\n"
             f"Exit:      ${price:,.4f}\n"
             f"Final P&L: {'+' if pnl >= 0 else ''}{pnl:.2f}%\n"
-            f"```",
-            ephemeral=True
+            f"```"
         )
     else:
         await interaction.followup.send(
-            f"✅ Closed **{pos['ticker']}** position (could not fetch exit price).", ephemeral=True
+            f"✅ Closed **{pos['ticker']}** position (could not fetch exit price)."
         )
 
 
