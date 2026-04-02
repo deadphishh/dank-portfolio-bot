@@ -248,19 +248,23 @@ async def portfolio_cmd(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 
-@tree.command(name="close", description="Close one of your open positions by index")
-@app_commands.describe(index="Position number from /positions (e.g. 1, 2, 3)")
-async def close_cmd(interaction: discord.Interaction, index: int):
+@tree.command(name="close", description="Close one of your open positions by ticker symbol")
+@app_commands.describe(ticker="Ticker symbol to close (e.g. MSFT, BTC). If you have multiple positions for the same ticker, the first one is closed.")
+async def close_cmd(interaction: discord.Interaction, ticker: str):
     portfolio = load_portfolio(PORTFOLIO_FILE)
     positions = get_user_positions(portfolio, str(interaction.user.id))
     if not positions:
         await interaction.response.send_message("📭 You have no open positions to close.")
         return
 
-    idx = index - 1
-    if idx < 0 or idx >= len(positions):
+    # Find the first position matching the ticker (case insensitive)
+    ticker_upper = ticker.strip().upper()
+    idx = next((i for i, p in enumerate(positions) if p["ticker"].upper() == ticker_upper), None)
+
+    if idx is None:
+        open_tickers = ", ".join(p["ticker"] for p in positions)
         await interaction.response.send_message(
-            f"❌ Invalid index. You have {len(positions)} position(s). Use /positions to see them.",
+            f"❌ No open position found for **{ticker_upper}**. Your open positions: {open_tickers}",
             ephemeral=True
         )
         return
@@ -268,7 +272,7 @@ async def close_cmd(interaction: discord.Interaction, index: int):
     await interaction.response.defer(thinking=True)
     pos = positions[idx]
     price = await get_price(pos["ticker"], pos["asset_type"])
-    exit_price = price if price else pos["entry_price"]  # fallback to entry if price unavailable
+    exit_price = price if price else pos["entry_price"]
 
     close_position(portfolio, str(interaction.user.id), idx,
                    exit_price=exit_price,
