@@ -383,6 +383,18 @@ async def on_ready():
     await tree.sync()
     monitor_positions.start()
     print(f"✅ Logged in as {client.user} | Monitoring every 5 minutes")
+    # Startup diagnostics — posts to #bot-logs so we can verify env vars are loaded
+    from price_fetcher import ALPACA_API_KEY, ALPACA_SECRET_KEY
+    alpaca_key_status = f"SET ({ALPACA_API_KEY[:6]}...)" if ALPACA_API_KEY else "❌ NOT SET"
+    alpaca_secret_status = "SET" if ALPACA_SECRET_KEY else "❌ NOT SET"
+    alert_ch = f"<#{ALERT_CHANNEL_ID}>" if ALERT_CHANNEL_ID else "❌ NOT SET"
+    await log(
+        f"Bot started: {client.user}\n"
+        f"ALPACA_API_KEY: {alpaca_key_status}\n"
+        f"ALPACA_SECRET_KEY: {alpaca_secret_status}\n"
+        f"ALERT_CHANNEL_ID: {alert_ch}\n"
+        f"LOG_CHANNEL_ID: {LOG_CHANNEL_ID if LOG_CHANNEL_ID else '❌ NOT SET'}"
+    )
 
 
 client.run(TOKEN)
