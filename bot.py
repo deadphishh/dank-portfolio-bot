@@ -16,7 +16,8 @@ from portfolio import (
 
 # ── Config ──────────────────────────────────────────────────────────────────
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-ALERT_CHANNEL_ID = int(os.getenv("DISCORD_ALERT_CHANNEL_ID", "0"))  # ID of your #alerts channel
+ALERT_CHANNEL_ID   = int(os.getenv("DISCORD_ALERT_CHANNEL_ID", "0"))  # ID of your #alerts channel
+ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
 PORTFOLIO_FILE = "portfolio.json"
 
 # P&L milestones to alert on (in percent, both positive and negative)
@@ -379,6 +380,88 @@ async def monitor_positions():
 @monitor_positions.before_loop
 async def before_monitor():
     await client.wait_until_ready()
+
+
+# ── Roast Command ────────────────────────────────────────────────────────────
+@tree.command(name="roast", description="Roast another user's positions with AI")
+@app_commands.describe(user="The user you want to roast")
+async def roast_cmd(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer()
+
+    if not ANTHROPIC_API_KEY:
+        await interaction.followup.send("❌ ANTHROPIC_API_KEY not set in environment variables.")
+        return
+
+    portfolio = load_portfolio(PORTFOLIO_FILE)
+    positions = get_user_positions(portfolio, str(user.id))
+
+    if not positions:
+        await interaction.followup.send(
+            f"📭 **{user.display_name}** has no open positions to roast. "
+            f"They're too scared to even be in the market. 🐔"
+        )
+        return
+
+    # Fetch live prices and build position summary for Claude
+    position_lines = []
+    for pos in positions:
+        price = await get_price(pos["ticker"], pos["asset_type"])
+        if price:
+            pnl = calculate_pnl(pos["entry_price"], price, pos["leverage"], pos["direction"])
+            pnl_str = f"{'+' if pnl >= 0 else ''}{pnl:.2f}%"
+            liq = pos["liquidation_price"]
+            liq_distance = abs((price - liq) / price * 100) if liq else None
+            liq_str = f"{liq_distance:.1f}% from liquidation" if liq_distance else "unknown liq distance"
+            position_lines.append(
+                f"- {pos['ticker']} {pos['direction'].upper()} {pos['leverage']}x | "
+                f"Entry: ${pos['entry_price']:,.4f} | Current: ${price:,.4f} | "
+                f"P&L: {pnl_str} | Liq: ${liq:,.4f} ({liq_str})"
+            )
+        else:
+            position_lines.append(
+                f"- {pos['ticker']} {pos['direction'].upper()} {pos['leverage']}x | "
+                f"Entry: ${pos['entry_price']:,.4f} | Price unavailable"
+            )
+
+    positions_text = "\n".join(position_lines)
+    username = user.display_name
+
+    prompt = f"""You are the most unhinged, degenerate trading roast bot on the internet. You talk like a terminally online crypto degen who has blown up 6 accounts, been liquidated on Christmas morning, and still thinks they're a genius. You roast with the energy of a group chat where everyone talks shit to each other because they're close friends — go hard, be ruthless, be filthy. Use heavy profanity freely — fuck, shit, ass, bastard, dickhead, dipshit, etc. Use them naturally and often. Use trading slang, memes, and pure savagery. Reference their specific positions, leverage, liquidation prices, and P&L to make it personal and cutting. If they're close to liquidation, absolutely destroy them for it. If they're up, accuse them of being a lucky idiot about to blow it. If they're down, pile on mercilessly. Be creative, be vile, be funny as hell. 5-6 sentences max. Go absolutely unhinged.
+
+{username}'s positions:
+{positions_text}
+
+Destroy them:"""
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    roast_text = data["content"][0]["text"].strip()
+                    await interaction.followup.send(
+                        f"🤡 **Roasting {user.mention}...**\n\n{roast_text}"
+                    )
+                else:
+                    body = await resp.text()
+                    await interaction.followup.send(f"❌ Claude API error: {resp.status}")
+                    print(f"[Roast API error] {resp.status}: {body}")
+    except Exception as e:
+        await interaction.followup.send("❌ Failed to generate roast. Claude is probably also losing money.")
+        print(f"[Roast exception] {e}")
 
 
 # ── Leaderboard Command ──────────────────────────────────────────────────────
