@@ -110,6 +110,10 @@ async def get_stock_price(ticker: str) -> float | None:
     Includes pre-market and after-hours prices (feed=iex covers extended hours).
     Falls back to latest trade if quote is unavailable.
     """
+    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+        print(f"[Alpaca] ERROR: API keys not set in environment variables")
+        return None
+
     headers = {
         "APCA-API-KEY-ID":     ALPACA_API_KEY,
         "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
@@ -131,9 +135,15 @@ async def get_stock_price(ticker: str) -> float | None:
                         return float(ask)
                     if bid and bid > 0:
                         return float(bid)
+                elif resp.status == 403:
+                    print(f"[Alpaca] 403 Forbidden — check ALPACA_API_KEY and ALPACA_SECRET_KEY in Railway variables")
+                    return None
+                elif resp.status == 422:
+                    print(f"[Alpaca] 422 Unprocessable — ticker '{ticker}' may not be supported on IEX feed")
+                    return None
                 else:
                     body = await resp.text()
-                    print(f"[Alpaca quote error] {ticker}: {body}")
+                    print(f"[Alpaca quote error] {ticker} status={resp.status}: {body}")
 
             # Fallback: latest trade price
             url = f"{ALPACA_BASE_URL}/stocks/{ticker}/trades/latest?feed=iex"
@@ -147,7 +157,7 @@ async def get_stock_price(ticker: str) -> float | None:
                         return float(price)
                 else:
                     body = await resp.text()
-                    print(f"[Alpaca trade error] {ticker}: {body}")
+                    print(f"[Alpaca trade error] {ticker} status={resp.status}: {body}")
 
     except Exception as e:
         print(f"[Alpaca exception] {ticker}: {e}")

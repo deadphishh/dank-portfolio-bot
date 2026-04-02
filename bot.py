@@ -16,6 +16,7 @@ from portfolio import (
 # ── Config ──────────────────────────────────────────────────────────────────
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 ALERT_CHANNEL_ID = int(os.getenv("DISCORD_ALERT_CHANNEL_ID", "0"))  # ID of your #alerts channel
+LOG_CHANNEL_ID   = int(os.getenv("DISCORD_LOG_CHANNEL_ID", "0"))    # ID of your #bot-logs channel
 PORTFOLIO_FILE = "portfolio.json"
 
 # P&L milestones to alert on (in percent, both positive and negative)
@@ -98,6 +99,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
         # Verify the ticker resolves to a real price
         price = await get_price(ticker_val, asset_type_val)
         if price is None:
+            await log(f"[price fetch failed] ticker={ticker_val} type={asset_type_val} user={interaction.user}")
             await interaction.followup.send(
                 f"❌ Could not fetch a price for **{ticker_val}** ({asset_type_val}). "
                 "Double-check the ticker symbol.", ephemeral=True
@@ -132,7 +134,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Liq. Price:  ${liq_price:,.4f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck, faggot 🎰"
+            f"Good luck out there, degen 🎰"
         )
 
 
@@ -285,6 +287,24 @@ async def send_alert(message: str):
         await channel.send(message)
     except discord.Forbidden:
         print(f"[ALERT — missing permissions] {message}")
+
+
+# ── Log Helper ───────────────────────────────────────────────────────────────
+async def log(message: str):
+    """Post a debug message to the bot logs channel."""
+    print(message)  # always print to Railway console too
+    if LOG_CHANNEL_ID == 0:
+        return
+    channel = client.get_channel(LOG_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(LOG_CHANNEL_ID)
+        except Exception:
+            return
+    try:
+        await channel.send(f"`{message}`")
+    except Exception:
+        pass
 
 
 # ── Background Price Monitor ─────────────────────────────────────────────────
