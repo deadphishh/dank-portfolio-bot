@@ -120,27 +120,37 @@ async def get_stock_price(ticker: str) -> float | None:
             # Try latest quote first (includes ask/bid for after-hours)
             url = f"{ALPACA_BASE_URL}/stocks/{ticker}/quotes/latest?feed=iex"
             async with session.get(url, headers=headers) as resp:
+                print(f"[Alpaca quote] {ticker} status={resp.status}")
                 if resp.status == 200:
                     data = await resp.json()
                     quote = data.get("quote", {})
-                    # Use ask price if available, otherwise bid, otherwise None
-                    ask = quote.get("ap")  # ask price
-                    bid = quote.get("bp")  # bid price
+                    ask = quote.get("ap")
+                    bid = quote.get("bp")
+                    print(f"[Alpaca quote] {ticker} ask={ask} bid={bid}")
                     if ask and ask > 0:
                         return float(ask)
                     if bid and bid > 0:
                         return float(bid)
+                else:
+                    body = await resp.text()
+                    print(f"[Alpaca quote error] {ticker}: {body}")
 
             # Fallback: latest trade price
             url = f"{ALPACA_BASE_URL}/stocks/{ticker}/trades/latest?feed=iex"
             async with session.get(url, headers=headers) as resp:
+                print(f"[Alpaca trade] {ticker} status={resp.status}")
                 if resp.status == 200:
                     data = await resp.json()
                     price = data.get("trade", {}).get("p")
+                    print(f"[Alpaca trade] {ticker} price={price}")
                     if price:
                         return float(price)
+                else:
+                    body = await resp.text()
+                    print(f"[Alpaca trade error] {ticker}: {body}")
 
-    except Exception:
+    except Exception as e:
+        print(f"[Alpaca exception] {ticker}: {e}")
         return None
 
     return None
