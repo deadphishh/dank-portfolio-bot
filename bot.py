@@ -6,7 +6,7 @@ import os
 import asyncio
 from datetime import datetime, timezone, timedelta
 from collections import Counter
-from price_fetcher import get_price, COINGECKO_ID_MAP
+from price_fetcher import get_price
 from portfolio import (
     load_portfolio, save_portfolio,
     add_position, close_position,
@@ -90,22 +90,21 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
 
         ticker_val = self.ticker.value.strip().upper()
 
-        # Auto-detect asset type: check crypto map first, fall back to stock
-        asset_type_val = "crypto" if ticker_val in COINGECKO_ID_MAP else "stock"
+        # Auto-detect asset type: try crypto first, fall back to stock
+        # Alpaca crypto uses /USD pairs — try crypto, if no price found try stock
+        price = await get_price(ticker_val, "crypto")
+        if price is not None:
+            asset_type_val = "crypto"
+        else:
+            price = await get_price(ticker_val, "stock")
+            asset_type_val = "stock"
 
-        # Verify the ticker resolves to a real price
-        price = await get_price(ticker_val, asset_type_val)
         if price is None:
-            # If crypto lookup failed, try stock as fallback
-            if asset_type_val == "crypto":
-                asset_type_val = "stock"
-                price = await get_price(ticker_val, asset_type_val)
-            if price is None:
-                await interaction.followup.send(
-                    f"❌ Could not fetch a price for **{ticker_val}**. "
-                    "Double-check the ticker symbol.", ephemeral=True
-                )
-                return
+            await interaction.followup.send(
+                f"❌ Could not fetch a price for **{ticker_val}**. "
+                "Double-check the ticker symbol.", ephemeral=True
+            )
+            return
 
         size = round(margin * lev, 2)          # notional size in USD
         units = round(size / entry, 6)           # units / shares / coins
