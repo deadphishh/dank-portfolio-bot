@@ -205,17 +205,17 @@ async def positions_cmd(interaction: discord.Interaction):
     entries.sort(key=lambda x: x["pnl"], reverse=True)
 
     lines = []
-    for entry in entries:
+    for i, entry in enumerate(entries):
         pos = entry["pos"]
         direction_emoji = "📈" if pos["direction"] == "long" else "📉"
         pnl_emoji = "🟢" if entry["pnl"] >= 0 else "🔴"
         size = pos.get("size", pos["entry_price"] * pos["leverage"])
+        units = pos.get("units", round(size / pos["entry_price"], 6) if pos["entry_price"] > 0 else 0)
+        # Single consistent format — no mixing bold + backticks, keep it plain
         lines.append(
-            f"{direction_emoji} **{pos['ticker']}** {pos['direction'].upper()} {pos['leverage']}x · "
-            f"👤 {entry['username']}\n"
-            f"Entry `${pos['entry_price']:,.2f}` → `{entry['price_display']}` · "
-            f"{pnl_emoji} **{entry['pnl_str']}** · "
-            f"`{pos.get('units', round(size / pos['entry_price'], 6)):,.4f}` units · Size `${size:,.2f}`"
+            f"{direction_emoji} **{pos['ticker']}** — {pos['direction'].upper()} {int(pos['leverage']) if pos['leverage'] == int(pos['leverage']) else pos['leverage']}x — {entry['username']}\n"
+            f"Entry: ${pos['entry_price']:,.2f}  {pnl_emoji} {entry['pnl_str']}\n"
+            f"Size: ${size:,.2f}"
         )
 
     embed = discord.Embed(
