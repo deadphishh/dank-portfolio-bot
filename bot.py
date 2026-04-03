@@ -11,7 +11,6 @@ from portfolio import (
     add_position, close_position,
     get_user_positions, get_all_positions,
     get_leaderboard, calculate_pnl,
-    calculate_liquidation_price
 )
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -22,7 +21,6 @@ PRICE_ALERTS_FILE = "price_alerts.json"
 
 # P&L milestones to alert on (in percent, both positive and negative)
 PNL_MILESTONES = [10, 25, 50, 75, 100, 125, 150, 200]
-LIQ_WARNING_LEVELS = [80, 95]  # % of the way to liquidation
 
 # ── Bot Setup ────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
@@ -106,7 +104,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             )
             return
 
-        liq_price = calculate_liquidation_price(entry, lev, direction_val)
+        size = round(entry * lev, 2)  # position size in USD
 
         position = {
             "ticker": ticker_val,
@@ -114,10 +112,9 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             "direction": direction_val,
             "entry_price": entry,
             "leverage": lev,
-            "liquidation_price": liq_price,
+            "size": size,
             "opened_at": datetime.utcnow().isoformat(),
             "alerted_milestones": [],      # e.g. ["10", "-10", "25"]
-            "alerted_liq_levels": []       # e.g. [80, 95]
         }
 
         portfolio = load_portfolio(PORTFOLIO_FILE)
@@ -131,7 +128,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Ticker:      {ticker_val}\n"
             f"Direction:   {direction_val.upper()} {lev}x\n"
             f"Entry Price: ${entry:,.4f}\n"
-            f"Liq. Price:  ${liq_price:,.4f}\n"
+            f"Size:        ${size:,.2f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
             f"Good luck out there, degen 🎰"
@@ -199,28 +196,32 @@ async def positions_cmd(interaction: discord.Interaction):
     # Sort by P&L descending (best first)
     entries.sort(key=lambda x: x["pnl"], reverse=True)
 
-    embed = discord.Embed(
-        title="📊 All Open Positions",
-        color=0x2B2D31,
-        timestamp=datetime.utcnow()
-    )
+    # Build rows as text — Discord embeds don't support true tables
+    # so we use a code block to align columns cleanly
+    header = f"  {'Ticker':<14} {'Trader':<14} {'Entry':>10} {'Current':>10} {'P&L':>9} {'Size':>12}"
+    divider = "─" * len(header)
+    rows = ["```", header, divider]
 
     for entry in entries:
         pos = entry["pos"]
-        direction_emoji = "📈" if pos["direction"] == "long" else "📉"
-        embed.add_field(
-            name=f"{direction_emoji} {pos['ticker']} — {pos['direction'].upper()} {pos['leverage']}x",
-            value=(
-                f"👤 **{entry['username']}**\n"
-                f"Entry: `${pos['entry_price']:,.4f}`\n"
-                f"Current: `{entry['price_display']}`\n"
-                f"{entry['pnl_emoji']} P&L: **{entry['pnl_str']}**\n"
-                f"Liq: `${pos['liquidation_price']:,.4f}`"
-            ),
-            inline=True
-        )
+        direction = "^" if pos["direction"] == "long" else "v"  # no emoji in code block — breaks alignment
+        ticker_col = f"{direction} {pos['ticker']:<6} {pos['direction'][0].upper()}{pos['leverage']}x"
+        user_col   = entry["username"][:13]
+        entry_col  = f"${pos['entry_price']:,.2f}"
+        curr_col   = entry["price_display"] if entry["price_display"] != "N/A" else "N/A"
+        pnl_col    = entry["pnl_str"]
+        size_col   = f"${pos.get('size', pos['entry_price'] * pos['leverage']):,.2f}"
+        rows.append(f"  {ticker_col:<14} {user_col:<14} {entry_col:>10} {curr_col:>10} {pnl_col:>9} {size_col:>12}")
 
-    embed.set_footer(text=f"{total_positions} open position(s) • sorted by P&L")
+    rows.append("```")
+
+    embed = discord.Embed(
+        title="📊 All Open Positions",
+        description="\n".join(rows),
+        color=0x2B2D31,
+        timestamp=datetime.utcnow()
+    )
+    embed.set_footer(text=f"{total_positions} position(s) • sorted by P&L")
     await interaction.followup.send(embed=embed)
 
 
@@ -250,7 +251,7 @@ async def portfolio_cmd(interaction: discord.Interaction):
                 f"Direction: {pos['direction'].upper()} {pos['leverage']}x\n"
                 f"Entry: ${pos['entry_price']:,.4f}\n"
                 f"Price: ⚠️ unavailable\n"
-                f"Liq: ${pos['liquidation_price']:,.4f}"
+                f"Size: ${pos.get('size', pos['entry_price'] * pos['leverage']):,.2f}"
             )
         else:
             pnl = calculate_pnl(pos["entry_price"], price, pos["leverage"], pos["direction"])
@@ -261,7 +262,7 @@ async def portfolio_cmd(interaction: discord.Interaction):
                 f"Direction: {pos['direction'].upper()} {pos['leverage']}x\n"
                 f"Entry: ${pos['entry_price']:,.4f} → ${price:,.4f}\n"
                 f"P&L: {pnl_emoji} **{'+' if pnl >= 0 else ''}{pnl:.2f}%**\n"
-                f"Liq: ${pos['liquidation_price']:,.4f}"
+                f"Size: ${pos.get('size', pos['entry_price'] * pos['leverage']):,.2f}"
             )
         direction_emoji = "📈" if pos["direction"] == "long" else "📉"
         embed.add_field(
@@ -358,7 +359,6 @@ async def monitor_positions():
                 continue
 
             pnl = calculate_pnl(pos["entry_price"], price, pos["leverage"], pos["direction"])
-            liq = pos["liquidation_price"]
             entry = pos["entry_price"]
             direction = pos["direction"]
 
@@ -381,30 +381,7 @@ async def monitor_positions():
                             pos["alerted_milestones"].append(key)
                             changed = True
 
-            # ── Liquidation proximity alerts ──────────────────────────────
-            if liq and entry:
-                if direction == "long":
-                    total_move = entry - liq
-                    current_move = entry - price
-                else:
-                    total_move = liq - entry
-                    current_move = price - entry
 
-                if total_move > 0:
-                    liq_pct = (current_move / total_move) * 100
-                    for level in LIQ_WARNING_LEVELS:
-                        if liq_pct >= level and level not in pos["alerted_liq_levels"]:
-                            await send_alert(
-                                f"⚠️ **LIQUIDATION WARNING — {pos['ticker']}** | "
-                                f"<@{user_id}>\n"
-                                f"You are **{level}% of the way to liquidation!**\n"
-                                f"Entry: ${entry:,.4f} | Current: ${price:,.4f} | "
-                                f"Liq: ${liq:,.4f}\n"
-                                f"Consider closing or adding margin to your "
-                                f"**{direction.upper()} {pos['leverage']}x** position."
-                            )
-                            pos["alerted_liq_levels"].append(level)
-                            changed = True
 
     if changed:
         save_portfolio(PORTFOLIO_FILE, portfolio)
@@ -539,7 +516,7 @@ async def mypositions_cmd(interaction: discord.Interaction):
             f"**#{i+1} {direction_emoji} {pos['ticker']}** — "
             f"{pos['direction'].upper()} {pos['leverage']}x\n"
             f"  Entry: ${pos['entry_price']:,.4f} | Current: {price_display} | "
-            f"P&L: **{pnl_str}** | Liq: ${pos['liquidation_price']:,.4f}\n"
+            f"P&L: **{pnl_str}** | Size: ${pos.get('size', pos['entry_price'] * pos['leverage']):,.2f}\n"
         )
     await interaction.followup.send("\n".join(lines), ephemeral=True)
 
