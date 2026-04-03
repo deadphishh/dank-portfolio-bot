@@ -31,12 +31,6 @@ tree = app_commands.CommandTree(client)
 
 # ── Modal: Add Position ──────────────────────────────────────────────────────
 class AddPositionModal(discord.ui.Modal, title="Add New Position"):
-    asset_type = discord.ui.TextInput(
-        label="Asset Type",
-        placeholder="crypto  OR  stock",
-        required=True,
-        max_length=10
-    )
     ticker = discord.ui.TextInput(
         label="Ticker Symbol",
         placeholder="e.g. BTC, ETH, AAPL, TSLA",
@@ -61,6 +55,12 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
         required=True,
         max_length=5
     )
+    margin = discord.ui.TextInput(
+        label="Margin / Collateral (USD)",
+        placeholder="e.g. 500.00",
+        required=True,
+        max_length=20
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         # Defer immediately with thinking=True — tells Discord to show a
@@ -68,13 +68,6 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
         await interaction.response.defer(thinking=True)
 
         # Validate inputs
-        asset_type_val = self.asset_type.value.strip().lower()
-        if asset_type_val not in ("crypto", "stock"):
-            await interaction.followup.send(
-                "❌ Asset type must be **crypto** or **stock**.", ephemeral=True
-            )
-            return
-
         direction_val = self.direction.value.strip().lower()
         if direction_val not in ("long", "short"):
             await interaction.followup.send(
@@ -85,26 +78,36 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
         try:
             entry = float(self.entry_price.value.strip())
             lev = float(self.leverage.value.strip())
-            if entry <= 0 or lev < 1 or lev > 100:
+            margin = float(self.margin.value.strip())
+            if entry <= 0 or lev < 1 or lev > 100 or margin <= 0:
                 raise ValueError
         except ValueError:
             await interaction.followup.send(
-                "❌ Entry price must be a positive number and leverage must be between 1 and 100.", ephemeral=True
+                "❌ Entry price, leverage (1-100), and margin must all be positive numbers.", ephemeral=True
             )
             return
 
         ticker_val = self.ticker.value.strip().upper()
 
+        # Auto-detect asset type: check crypto map first, fall back to stock
+        from price_fetcher import COINGECKO_ID_MAP
+        asset_type_val = "crypto" if ticker_val in COINGECKO_ID_MAP else "stock"
+
         # Verify the ticker resolves to a real price
         price = await get_price(ticker_val, asset_type_val)
         if price is None:
-            await interaction.followup.send(
-                f"❌ Could not fetch a price for **{ticker_val}** ({asset_type_val}). "
-                "Double-check the ticker symbol.", ephemeral=True
-            )
-            return
+            # If crypto lookup failed, try stock as fallback
+            if asset_type_val == "crypto":
+                asset_type_val = "stock"
+                price = await get_price(ticker_val, asset_type_val)
+            if price is None:
+                await interaction.followup.send(
+                    f"❌ Could not fetch a price for **{ticker_val}**. "
+                    "Double-check the ticker symbol.", ephemeral=True
+                )
+                return
 
-        size = round(entry * lev, 2)  # position size in USD
+        size = round(margin * lev, 2)  # position size = margin × leverage
 
         position = {
             "ticker": ticker_val,
@@ -112,6 +115,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             "direction": direction_val,
             "entry_price": entry,
             "leverage": lev,
+            "margin": margin,
             "size": size,
             "opened_at": datetime.utcnow().isoformat(),
             "alerted_milestones": [],      # e.g. ["10", "-10", "25"]
@@ -128,10 +132,11 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Ticker:      {ticker_val}\n"
             f"Direction:   {direction_val.upper()} {lev}x\n"
             f"Entry Price: ${entry:,.4f}\n"
+            f"Margin:      ${margin:,.2f}\n"
             f"Size:        ${size:,.2f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck out there, degen 🎰"
+            f"Good luck, faggot 🤡"
         )
 
 
