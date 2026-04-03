@@ -5,12 +5,12 @@ import json
 import os
 import asyncio
 from datetime import datetime, timezone, timedelta
-from price_fetcher import get_price
+from collections import Counter
+from price_fetcher import get_price, COINGECKO_ID_MAP
 from portfolio import (
     load_portfolio, save_portfolio,
     add_position, close_position,
     get_user_positions, get_all_positions,
-    partial_close_position,
     get_leaderboard, calculate_pnl,
 )
 
@@ -91,7 +91,6 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
         ticker_val = self.ticker.value.strip().upper()
 
         # Auto-detect asset type: check crypto map first, fall back to stock
-        from price_fetcher import COINGECKO_ID_MAP
         asset_type_val = "crypto" if ticker_val in COINGECKO_ID_MAP else "stock"
 
         # Verify the ticker resolves to a real price
@@ -1004,7 +1003,6 @@ async def weekly_recap():
     worst = min(all_week, key=lambda x: x["pnl"])
 
     # Most active trader (most closed trades this week)
-    from collections import Counter
     trader_counts = Counter(h["username"] for h in week_trades)
     most_active = trader_counts.most_common(1)[0] if trader_counts else None
 
