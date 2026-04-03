@@ -10,6 +10,7 @@ from portfolio import (
     load_portfolio, save_portfolio,
     add_position, close_position,
     get_user_positions, get_all_positions,
+    partial_close_position,
     get_leaderboard, calculate_pnl,
 )
 
@@ -107,7 +108,8 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
                 )
                 return
 
-        size = round(margin * lev, 2)  # position size = margin × leverage
+        size = round(margin * lev, 2)          # notional size in USD
+        units = round(size / entry, 6)           # units / shares / coins
 
         position = {
             "ticker": ticker_val,
@@ -117,6 +119,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             "leverage": lev,
             "margin": margin,
             "size": size,
+            "units": units,
             "opened_at": datetime.utcnow().isoformat(),
             "alerted_milestones": [],      # e.g. ["10", "-10", "25"]
         }
@@ -133,6 +136,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Direction:   {direction_val.upper()} {lev}x\n"
             f"Entry Price: ${entry:,.4f}\n"
             f"Margin:      ${margin:,.2f}\n"
+            f"Units:       {units:,.6f}\n"
             f"Size:        ${size:,.2f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
@@ -212,7 +216,7 @@ async def positions_cmd(interaction: discord.Interaction):
             f"👤 {entry['username']}\n"
             f"Entry `${pos['entry_price']:,.2f}` → `{entry['price_display']}` · "
             f"{pnl_emoji} **{entry['pnl_str']}** · "
-            f"Size `${size:,.2f}`"
+            f"`{pos.get('units', round(size / pos['entry_price'], 6)):,.4f}` units · Size `${size:,.2f}`"
         )
 
     embed = discord.Embed(
@@ -474,6 +478,208 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     embed.set_footer(text="Ranked by leveraged P&L %")
     await interaction.followup.send(embed=embed)
 
+
+
+# ── /sell (partial close) ────────────────────────────────────────────────────
+@tree.command(name="sell", description="Partially close a position by % or number of units")
+@app_commands.describe(
+    ticker="Ticker symbol e.g. BTC, MSFT",
+    amount="% of position (e.g. 50%) OR number of units (e.g. 2)"
+)
+async def sell_cmd(interaction: discord.Interaction, ticker: str, amount: str):
+    await interaction.response.defer(thinking=True)
+
+    portfolio = load_portfolio(PORTFOLIO_FILE)
+    positions = get_user_positions(portfolio, str(interaction.user.id))
+    if not positions:
+        await interaction.followup.send("📭 You have no open positions.")
+        return
+
+    ticker_upper = ticker.strip().upper()
+    idx = next((i for i, p in enumerate(positions) if p["ticker"].upper() == ticker_upper), None)
+    if idx is None:
+        open_tickers = ", ".join(p["ticker"] for p in positions)
+        await interaction.followup.send(
+            f"❌ No open position found for **{ticker_upper}**. Your open positions: {open_tickers}",
+            ephemeral=True
+        )
+        return
+
+    pos = positions[idx]
+    amount = amount.strip()
+
+    # Parse amount — either "50%" or a number like "2"
+    orig_margin = pos.get("margin", pos.get("size", 0) / pos["leverage"])
+    orig_size   = pos.get("size", orig_margin * pos["leverage"])
+
+    # Calculate total units from size and entry price
+    total_units = orig_size / pos["entry_price"] if pos["entry_price"] > 0 else 1
+
+    if amount.endswith("%"):
+        try:
+            pct = float(amount[:-1])
+            if pct <= 0 or pct >= 100:
+                raise ValueError
+            units_sold = total_units * (pct / 100)
+            fraction_label = f"{pct:.1f}%"
+        except ValueError:
+            await interaction.followup.send(
+                "❌ Percentage must be between 0% and 100% (exclusive). Use 100% to fully close — use `/close` instead.",
+                ephemeral=True
+            )
+            return
+    else:
+        try:
+            units_sold = float(amount)
+            if units_sold <= 0 or units_sold >= total_units:
+                raise ValueError
+            fraction_label = f"{units_sold:,.4f} units"
+        except ValueError:
+            await interaction.followup.send(
+                f"❌ Invalid amount. Enter a % (e.g. `50%`) or number of units less than your total "
+                f"({total_units:,.4f}). Use `/close` to fully close.",
+                ephemeral=True
+            )
+            return
+
+    # Fetch current price
+    price = await get_price(pos["ticker"], pos["asset_type"])
+    exit_price = price if price else pos["entry_price"]
+
+    # Execute partial close
+    result = partial_close_position(
+        portfolio, str(interaction.user.id), idx,
+        exit_price=exit_price,
+        username=interaction.user.display_name,
+        units_sold=units_sold,
+        total_units=total_units
+    )
+    save_portfolio(PORTFOLIO_FILE, portfolio)
+
+    pnl = calculate_pnl(pos["entry_price"], exit_price, pos["leverage"], pos["direction"])
+    pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+    sold_size = result["sold_size"]
+    remaining_size = pos.get("size", orig_size)  # updated in place by partial_close_position
+
+    await interaction.followup.send(
+        f"✂️ **Partial close — {ticker_upper}**\n"
+        f"```\n"
+        f"Sold:      {fraction_label}\n"
+        f"Exit:      ${exit_price:,.4f}\n"
+        f"P&L:       {'+' if pnl >= 0 else ''}{pnl:.2f}%\n"
+        f"Sold Size: ${sold_size:,.2f}\n"
+        f"Remaining: ${remaining_size:,.2f}\n"
+        f"```"
+    )
+
+
+# ── /sell (partial or full close) ────────────────────────────────────────────
+@tree.command(name="sell", description="Partially or fully close a position by units or %")
+@app_commands.describe(
+    ticker="Ticker to sell (e.g. BTC, MSFT)",
+    amount="Units to sell (e.g. 0.5) OR percentage (e.g. 50%)"
+)
+async def sell_cmd(interaction: discord.Interaction, ticker: str, amount: str):
+    portfolio = load_portfolio(PORTFOLIO_FILE)
+    positions = get_user_positions(portfolio, str(interaction.user.id))
+    if not positions:
+        await interaction.response.send_message("📭 You have no open positions.", ephemeral=True)
+        return
+
+    ticker_upper = ticker.strip().upper()
+    idx = next((i for i, p in enumerate(positions) if p["ticker"].upper() == ticker_upper), None)
+    if idx is None:
+        open_tickers = ", ".join(p["ticker"] for p in positions)
+        await interaction.response.send_message(
+            f"❌ No open position found for **{ticker_upper}**. Your open positions: {open_tickers}",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(thinking=True)
+    pos = positions[idx]
+    total_units = pos.get("units", round((pos["margin"] * pos["leverage"]) / pos["entry_price"], 6) if "margin" in pos else 1.0)
+
+    # Parse amount — either "50%" or a unit number like "0.5"
+    amount = amount.strip()
+    try:
+        if amount.endswith("%"):
+            pct = float(amount[:-1])
+            if pct <= 0 or pct > 100:
+                raise ValueError
+            sell_units = round(total_units * pct / 100, 6)
+        else:
+            sell_units = float(amount)
+            if sell_units <= 0:
+                raise ValueError
+    except ValueError:
+        await interaction.followup.send(
+            "❌ Invalid amount. Use a percentage like `50%` or a unit amount like `0.5`.", ephemeral=True
+        )
+        return
+
+    if sell_units > total_units + 0.000001:
+        await interaction.followup.send(
+            f"❌ You only have **{total_units:,.6f}** units of {ticker_upper}. Can't sell {sell_units:,.6f}.",
+            ephemeral=True
+        )
+        return
+
+    price = await get_price(pos["ticker"], pos["asset_type"])
+    exit_price = price if price else pos["entry_price"]
+    pnl = calculate_pnl(pos["entry_price"], exit_price, pos["leverage"], pos["direction"])
+    pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+    sell_pct = sell_units / total_units
+    realized_pnl = round(pnl * sell_pct, 4)
+
+    is_full_close = sell_units >= total_units - 0.000001
+
+    if is_full_close:
+        # Full close — remove position and record in history
+        close_position(portfolio, str(interaction.user.id), idx,
+                       exit_price=exit_price,
+                       username=interaction.user.display_name)
+        result_msg = f"✅ **Position fully closed.**"
+    else:
+        # Partial close — reduce units, margin, size on the position
+        remaining_units = round(total_units - sell_units, 6)
+        remaining_pct = remaining_units / total_units
+        pos["units"] = remaining_units
+        pos["margin"] = round(pos.get("margin", pos["entry_price"]) * remaining_pct, 2)
+        pos["size"] = round(pos["size"] * remaining_pct, 2) if "size" in pos else round(remaining_units * pos["entry_price"], 2)
+
+        # Record partial close in history
+        partial_entry = {
+            "user_id":     str(interaction.user.id),
+            "username":    interaction.user.display_name,
+            "ticker":      pos["ticker"],
+            "asset_type":  pos["asset_type"],
+            "direction":   pos["direction"],
+            "leverage":    pos["leverage"],
+            "entry_price": pos["entry_price"],
+            "exit_price":  exit_price,
+            "units_sold":  sell_units,
+            "pnl":         realized_pnl,
+            "partial":     True,
+            "opened_at":   pos.get("opened_at", ""),
+            "closed_at":   datetime.utcnow().isoformat(),
+        }
+        portfolio["history"].append(partial_entry)
+        result_msg = f"✅ **Partial sell — {remaining_units:,.6f} units remaining.**"
+
+    save_portfolio(PORTFOLIO_FILE, portfolio)
+
+    sell_value = round(sell_units * exit_price, 2)
+    await interaction.followup.send(
+        f"{result_msg}\n"
+        f"```\n"
+        f"Ticker:      {ticker_upper}\n"
+        f"Units Sold:  {sell_units:,.6f} ({sell_pct*100:.1f}% of position)\n"
+        f"Exit Price:  ${exit_price:,.4f}\n"
+        f"Sale Value:  ${sell_value:,.2f}\n"
+        f"Realized P&L:{'+' if realized_pnl >= 0 else ''}{realized_pnl:.2f}%\n"
+        f"```"
+    )
 
 
 # ── Price Alerts Helpers ──────────────────────────────────────────────────────
