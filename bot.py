@@ -201,28 +201,23 @@ async def positions_cmd(interaction: discord.Interaction):
     # Sort by P&L descending (best first)
     entries.sort(key=lambda x: x["pnl"], reverse=True)
 
-    # Build rows as text — Discord embeds don't support true tables
-    # so we use a code block to align columns cleanly
-    header = f"  {'Ticker':<14} {'Trader':<14} {'Entry':>10} {'Current':>10} {'P&L':>9} {'Size':>12}"
-    divider = "─" * len(header)
-    rows = ["```", header, divider]
-
+    lines = []
     for entry in entries:
         pos = entry["pos"]
-        direction = "^" if pos["direction"] == "long" else "v"  # no emoji in code block — breaks alignment
-        ticker_col = f"{direction} {pos['ticker']:<6} {pos['direction'][0].upper()}{pos['leverage']}x"
-        user_col   = entry["username"][:13]
-        entry_col  = f"${pos['entry_price']:,.2f}"
-        curr_col   = entry["price_display"] if entry["price_display"] != "N/A" else "N/A"
-        pnl_col    = entry["pnl_str"]
-        size_col   = f"${pos.get('size', pos['entry_price'] * pos['leverage']):,.2f}"
-        rows.append(f"  {ticker_col:<14} {user_col:<14} {entry_col:>10} {curr_col:>10} {pnl_col:>9} {size_col:>12}")
-
-    rows.append("```")
+        direction_emoji = "📈" if pos["direction"] == "long" else "📉"
+        pnl_emoji = "🟢" if entry["pnl"] >= 0 else "🔴"
+        size = pos.get("size", pos["entry_price"] * pos["leverage"])
+        lines.append(
+            f"{direction_emoji} **{pos['ticker']}** {pos['direction'].upper()} {pos['leverage']}x · "
+            f"👤 {entry['username']}\n"
+            f"Entry `${pos['entry_price']:,.2f}` → `{entry['price_display']}` · "
+            f"{pnl_emoji} **{entry['pnl_str']}** · "
+            f"Size `${size:,.2f}`"
+        )
 
     embed = discord.Embed(
         title="📊 All Open Positions",
-        description="\n".join(rows),
+        description="\n\n".join(lines),
         color=0x2B2D31,
         timestamp=datetime.utcnow()
     )
