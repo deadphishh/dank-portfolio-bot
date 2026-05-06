@@ -212,8 +212,7 @@ async def positions_cmd(interaction: discord.Interaction):
         ticker = pos["ticker"].replace("*", "").replace("`", "").replace("_", "")
         lev = int(pos["leverage"]) if pos["leverage"] == int(pos["leverage"]) else pos["leverage"]
         lines.append(
-            f"{direction_emoji} {ticker} • {pos['direction'].upper()} {lev}x • {entry['username']}\n​"
-            f"Entry: ${pos['entry_price']:,.2f} {pnl_emoji} {entry['pnl_str']} • Size: ${size:,.2f}"
+            f"{ticker} {direction_emoji} {pos['direction'].upper()} {lev}x | {entry['username']} | Entry: ${pos['entry_price']:,.2f} | {pnl_emoji} {entry['pnl_str']} | Size: ${size:,.2f}"
         )
 
     embed = discord.Embed(
