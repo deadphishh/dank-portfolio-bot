@@ -207,7 +207,7 @@ def calculate_pnl(entry_price: float, current_price: float,
     """
     if entry_price == 0:
         return 0.0
-    if direction == "long":
+    if direction.strip().lower() == "long":
         return ((current_price - entry_price) / entry_price) * leverage * 100
     else:
         return ((entry_price - current_price) / entry_price) * leverage * 100
@@ -222,7 +222,7 @@ def calculate_liquidation_price(entry_price: float, leverage: float,
     """
     if leverage <= 0:
         return 0.0
-    if direction == "long":
+    if direction.strip().lower() == "long":
         return round(entry_price * (1 - 1 / leverage), 6)
     else:
         return round(entry_price * (1 + 1 / leverage), 6)

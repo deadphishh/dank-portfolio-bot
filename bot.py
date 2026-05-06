@@ -206,7 +206,7 @@ async def positions_cmd(interaction: discord.Interaction):
     lines = []
     for entry in entries:
         pos = entry["pos"]
-        direction_emoji = "📈" if pos["direction"] == "long" else "📉"
+        direction_emoji = "📈" if pos["direction"].strip().lower() == "long" else "📉"
         pnl_emoji = "🟢" if entry["pnl"] >= 0 else "🔴"
         size = pos.get("size", pos["entry_price"] * pos["leverage"])
         ticker = pos["ticker"].replace("*", "").replace("`", "").replace("_", "")
@@ -265,7 +265,7 @@ async def portfolio_cmd(interaction: discord.Interaction):
                 f"P&L: {pnl_emoji} **{'+' if pnl >= 0 else ''}{pnl:.2f}%**\n"
                 f"Size: ${pos.get('size', pos['entry_price'] * pos['leverage']):,.2f}"
             )
-        direction_emoji = "📈" if pos["direction"] == "long" else "📉"
+        direction_emoji = "📈" if pos["direction"].strip().lower() == "long" else "📉"
         embed.add_field(
             name=f"#{i+1} {direction_emoji} {pos['ticker']}",
             value=field_val,
@@ -451,7 +451,7 @@ async def leaderboard_cmd(interaction: discord.Interaction):
     for i, entry in enumerate(top):
         pnl = entry["pnl"]
         pnl_str = f"{'+' if pnl >= 0 else ''}{pnl:.2f}%"
-        direction_emoji = "📈" if entry["direction"] == "long" else "📉"
+        direction_emoji = "📈" if entry["direction"].strip().lower() == "long" else "📉"
         status = "🟢 Open" if entry["status"] == "open" else "🔒 Closed"
 
         # Format opened_at date
@@ -712,7 +712,7 @@ async def mypositions_cmd(interaction: discord.Interaction):
             pnl = calculate_pnl(pos["entry_price"], price, pos["leverage"], pos["direction"])
             pnl_str = f"{'+' if pnl >= 0 else ''}{pnl:.2f}%"
             price_display = f"${price:,.4f}"
-        direction_emoji = "📈" if pos["direction"] == "long" else "📉"
+        direction_emoji = "📈" if pos["direction"].strip().lower() == "long" else "📉"
         lines.append(
             f"#{i+1} {direction_emoji} {pos['ticker'].replace('*', '').replace('`', '')} — "
             f"{pos['direction'].upper()} {pos['leverage']}x\n"
@@ -758,7 +758,7 @@ async def history_cmd(interaction: discord.Interaction):
         except Exception:
             closed = "Unknown"
         pnl_emoji = "🟢" if h["pnl"] >= 0 else "🔴"
-        direction_emoji = "📈" if h["direction"] == "long" else "📉"
+        direction_emoji = "📈" if h["direction"].strip().lower() == "long" else "📉"
         embed.add_field(
             name=f"{direction_emoji} {h['ticker']} {h['direction'].upper()} {h['leverage']}x",
             value=(
