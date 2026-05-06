@@ -88,7 +88,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             )
             return
 
-        ticker_val = self.ticker.value.strip().upper()
+        ticker_val = self.ticker.value.strip().upper().replace("*", "").replace("`", "").replace("_", "")
 
         # Auto-detect asset type: try crypto first, fall back to stock
         # Alpaca crypto uses /USD pairs — try crypto, if no price found try stock
@@ -138,7 +138,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Size:        ${size:,.2f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck, faggot 🤡"
+            f"Good luck out there, faggot 🤡"
         )
 
 
@@ -212,7 +212,7 @@ async def positions_cmd(interaction: discord.Interaction):
         units = pos.get("units", round(size / pos["entry_price"], 6) if pos["entry_price"] > 0 else 0)
         # Single consistent format — no mixing bold + backticks, keep it plain
         lines.append(
-            f"{direction_emoji} **{pos['ticker']}** — {pos['direction'].upper()} {int(pos['leverage']) if pos['leverage'] == int(pos['leverage']) else pos['leverage']}x — {entry['username']}\n"
+            f"{direction_emoji} {pos['ticker'].replace('*', '').replace('`', '')} — {pos['direction'].upper()} {int(pos['leverage']) if pos['leverage'] == int(pos['leverage']) else pos['leverage']}x — {entry['username']}\n"
             f"Entry: ${pos['entry_price']:,.2f}  {pnl_emoji} {entry['pnl_str']}\n"
             f"Size: ${size:,.2f}"
         )
@@ -349,7 +349,7 @@ async def send_alert(message: str):
 
 
 # ── Background Price Monitor ─────────────────────────────────────────────────
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=2)
 async def monitor_positions():
     portfolio = load_portfolio(PORTFOLIO_FILE)
     changed = False
@@ -588,6 +588,96 @@ async def sell_cmd(interaction: discord.Interaction, ticker: str, amount: str):
     )
 
 
+# ── /edit ────────────────────────────────────────────────────────────────────
+@tree.command(name="edit", description="Edit an open position's entry price, leverage, or margin")
+@app_commands.describe(
+    ticker="Ticker of the position to edit (e.g. BTC, MSFT)",
+    entry_price="New entry price in USD (optional)",
+    leverage="New leverage 1-100x (optional)",
+    margin="New margin/collateral in USD (optional)"
+)
+async def edit_cmd(
+    interaction: discord.Interaction,
+    ticker: str,
+    entry_price: float = None,
+    leverage: float = None,
+    margin: float = None
+):
+    if entry_price is None and leverage is None and margin is None:
+        await interaction.response.send_message(
+            "❌ Provide at least one field to update: `entry_price`, `leverage`, or `margin`.",
+            ephemeral=True
+        )
+        return
+
+    portfolio = load_portfolio(PORTFOLIO_FILE)
+    positions = get_user_positions(portfolio, str(interaction.user.id))
+    if not positions:
+        await interaction.response.send_message("📭 You have no open positions to edit.", ephemeral=True)
+        return
+
+    ticker_upper = ticker.strip().upper()
+    idx = next((i for i, p in enumerate(positions) if p["ticker"].upper() == ticker_upper), None)
+    if idx is None:
+        open_tickers = ", ".join(p["ticker"] for p in positions)
+        await interaction.response.send_message(
+            f"❌ No open position found for **{ticker_upper}**. Your open positions: {open_tickers}",
+            ephemeral=True
+        )
+        return
+
+    pos = positions[idx]
+    changes = []
+
+    # Apply updates
+    if entry_price is not None:
+        if entry_price <= 0:
+            await interaction.response.send_message("❌ Entry price must be a positive number.", ephemeral=True)
+            return
+        old_entry = pos["entry_price"]
+        pos["entry_price"] = entry_price
+        changes.append(f"Entry Price: ${old_entry:,.4f} → ${entry_price:,.4f}")
+
+    if leverage is not None:
+        if leverage < 1 or leverage > 100:
+            await interaction.response.send_message("❌ Leverage must be between 1 and 100.", ephemeral=True)
+            return
+        old_lev = pos["leverage"]
+        pos["leverage"] = leverage
+        changes.append(f"Leverage: {int(old_lev) if old_lev == int(old_lev) else old_lev}x → {int(leverage) if leverage == int(leverage) else leverage}x")
+
+    if margin is not None:
+        if margin <= 0:
+            await interaction.response.send_message("❌ Margin must be a positive number.", ephemeral=True)
+            return
+        old_margin = pos.get("margin", 0)
+        pos["margin"] = margin
+        changes.append(f"Margin: ${old_margin:,.2f} → ${margin:,.2f}")
+
+    # Recalculate size and units from updated values
+    cur_entry  = pos["entry_price"]
+    cur_lev    = pos["leverage"]
+    cur_margin = pos.get("margin", 0)
+    if cur_margin > 0:
+        pos["size"]  = round(cur_margin * cur_lev, 2)
+        pos["units"] = round(pos["size"] / cur_entry, 6) if cur_entry > 0 else pos.get("units", 0)
+
+    # Reset alerted milestones so user gets fresh alerts at new entry
+    pos["alerted_milestones"] = []
+
+    save_portfolio(PORTFOLIO_FILE, portfolio)
+
+    changes_str = "\n".join(changes)
+    lev_display = int(pos["leverage"]) if pos["leverage"] == int(pos["leverage"]) else pos["leverage"]
+    await interaction.response.send_message(
+        f"✅ **{ticker_upper}** position updated:\n"
+        f"```\n{changes_str}\n```\n"
+        f"New size: ${pos.get('size', 0):,.2f} | Units: {pos.get('units', 0):,.6f} | {lev_display}x leverage\n"
+        f"_Milestone alerts have been reset for this position._",
+        ephemeral=True
+    )
+
+
 # ── Price Alerts Helpers ──────────────────────────────────────────────────────
 def load_price_alerts() -> list:
     if not os.path.exists(PRICE_ALERTS_FILE):
@@ -625,7 +715,7 @@ async def mypositions_cmd(interaction: discord.Interaction):
             price_display = f"${price:,.4f}"
         direction_emoji = "📈" if pos["direction"] == "long" else "📉"
         lines.append(
-            f"**#{i+1} {direction_emoji} {pos['ticker']}** — "
+            f"#{i+1} {direction_emoji} {pos['ticker'].replace('*', '').replace('`', '')} — "
             f"{pos['direction'].upper()} {pos['leverage']}x\n"
             f"  Entry: ${pos['entry_price']:,.4f} | Current: {price_display} | "
             f"P&L: **{pnl_str}** | Size: ${pos.get('size', pos['entry_price'] * pos['leverage']):,.2f}\n"
@@ -813,7 +903,7 @@ tree.add_command(alert_group)
 
 
 # ── Price Alert Monitor ───────────────────────────────────────────────────────
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=2)
 async def monitor_price_alerts():
     alerts = load_price_alerts()
     if not alerts:
@@ -960,7 +1050,7 @@ async def on_ready():
     monitor_positions.start()
     monitor_price_alerts.start()
     weekly_recap.start()
-    print(f"✅ Logged in as {client.user} | Monitoring every 5 minutes")
+    print(f"✅ Logged in as {client.user} | Monitoring every 2 minutes")
 
 
 client.run(TOKEN)

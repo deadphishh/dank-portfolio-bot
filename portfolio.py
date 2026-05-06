@@ -51,6 +51,14 @@ def load_portfolio(filepath: str) -> dict:
     if "history" not in data:
         data["history"] = []
 
+    # Sanitize any tickers that got saved with markdown chars
+    for user_id, positions in data["positions"].items():
+        for pos in positions:
+            pos["ticker"] = pos["ticker"].replace("*", "").replace("`", "").replace("_", "")
+    for entry in data["history"]:
+        if "ticker" in entry:
+            entry["ticker"] = entry["ticker"].replace("*", "").replace("`", "").replace("_", "")
+
     return data
 
 
@@ -92,9 +100,59 @@ def close_position(portfolio: dict, user_id: str, index: int,
         "pnl":        round(pnl, 4),
         "opened_at":  pos.get("opened_at", ""),
         "closed_at":  datetime.utcnow().isoformat(),
+        "partial":    False,
     }
     portfolio["history"].append(history_entry)
     return pos
+
+
+def partial_close_position(portfolio: dict, user_id: str, index: int,
+                           exit_price: float, username: str,
+                           units_sold: float, total_units: float) -> dict | None:
+    """
+    Partially close a position by reducing its size.
+    units_sold / total_units determines the fraction closed.
+    Records the partial close in history and updates the remaining position.
+    Returns a dict with partial close details or None if invalid.
+    """
+    positions = portfolio["positions"].get(user_id, [])
+    if index < 0 or index >= len(positions):
+        return None
+
+    pos = positions[index]
+    fraction = units_sold / total_units
+    pnl = calculate_pnl(pos["entry_price"], exit_price, pos["leverage"], pos["direction"])
+
+    # Scale margin and size by fraction sold
+    orig_margin = pos.get("margin", pos.get("size", 0) / pos["leverage"])
+    orig_size   = pos.get("size", orig_margin * pos["leverage"])
+    sold_margin = round(orig_margin * fraction, 4)
+    sold_size   = round(orig_size * fraction, 4)
+
+    history_entry = {
+        "user_id":     user_id,
+        "username":    username,
+        "ticker":      pos["ticker"],
+        "asset_type":  pos["asset_type"],
+        "direction":   pos["direction"],
+        "leverage":    pos["leverage"],
+        "entry_price": pos["entry_price"],
+        "exit_price":  exit_price,
+        "pnl":         round(pnl, 4),
+        "opened_at":   pos.get("opened_at", ""),
+        "closed_at":   datetime.utcnow().isoformat(),
+        "partial":     True,
+        "fraction":    round(fraction, 4),
+        "sold_size":   sold_size,
+    }
+    portfolio["history"].append(history_entry)
+
+    # Update remaining position size/margin
+    remaining_fraction = 1 - fraction
+    pos["margin"] = round(orig_margin * remaining_fraction, 4)
+    pos["size"]   = round(orig_size * remaining_fraction, 4)
+
+    return history_entry
 
 
 def get_user_positions(portfolio: dict, user_id: str) -> list:
