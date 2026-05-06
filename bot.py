@@ -138,7 +138,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Size:        ${size:,.2f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck out there, faggot 🤡"
+            f"Good luck, faggot 🤡"
         )
 
 
@@ -212,12 +212,13 @@ async def positions_cmd(interaction: discord.Interaction):
         ticker = pos["ticker"].replace("*", "").replace("`", "").replace("_", "")
         lev = int(pos["leverage"]) if pos["leverage"] == int(pos["leverage"]) else pos["leverage"]
         lines.append(
-            f"{ticker} {direction_emoji} {pos['direction'].upper()} {lev}x | {entry['username']} | Entry: ${pos['entry_price']:,.2f} | {pnl_emoji} {entry['pnl_str']} | Size: ${size:,.2f}"
+            f"{direction_emoji} {ticker} — {pos['direction'].upper()} {lev}x — {entry['username']}\n"
+            f"Entry: ${pos['entry_price']:,.2f}  {pnl_emoji} {entry['pnl_str']}  |  Size: ${size:,.2f}"
         )
 
     embed = discord.Embed(
         title="📊 All Open Positions",
-        description="\n\n".join(lines),
+        description="\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n".join(lines),
         color=0x2B2D31,
         timestamp=datetime.utcnow()
     )
