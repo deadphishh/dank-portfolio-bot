@@ -138,7 +138,7 @@ class AddPositionModal(discord.ui.Modal, title="Add New Position"):
             f"Size:        ${size:,.2f}\n"
             f"Current:     ${price:,.4f}\n"
             f"```\n"
-            f"Good luck out there, retard 🤡"
+            f"Good luck out there, faggot 🤡"
         )
 
 
@@ -203,7 +203,7 @@ async def positions_cmd(interaction: discord.Interaction):
     # Sort by P&L descending (best first)
     entries.sort(key=lambda x: x["pnl"], reverse=True)
 
-    lines = ["📊 **All Open Positions**\n"]
+    lines = []
     for entry in entries:
         pos = entry["pos"]
         direction_emoji = "📈" if pos["direction"] == "long" else "📉"
@@ -212,11 +212,18 @@ async def positions_cmd(interaction: discord.Interaction):
         ticker = pos["ticker"].replace("*", "").replace("`", "").replace("_", "")
         lev = int(pos["leverage"]) if pos["leverage"] == int(pos["leverage"]) else pos["leverage"]
         lines.append(
-            f"{direction_emoji} {ticker} — {pos['direction'].upper()} {lev}x — {entry['username']}\n"
-            f"Entry: ${pos['entry_price']:,.2f}  {pnl_emoji} {entry['pnl_str']}  |  Size: ${size:,.2f}"
+            f"{direction_emoji} {ticker} • {pos['direction'].upper()} {lev}x • {entry['username']}\n​"
+            f"Entry: ${pos['entry_price']:,.2f} {pnl_emoji} {entry['pnl_str']} • Size: ${size:,.2f}"
         )
 
-    await interaction.followup.send("\n\n".join(lines) + f"\n\n_{total_positions} position(s) • sorted by P&L_")
+    embed = discord.Embed(
+        title="📊 All Open Positions",
+        description="\n\n".join(lines),
+        color=0x2B2D31,
+        timestamp=datetime.utcnow()
+    )
+    embed.set_footer(text=f"{total_positions} position(s) • sorted by P&L")
+    await interaction.followup.send(embed=embed)
 
 
 @tree.command(name="portfolio", description="View a detailed portfolio summary with P&L")
