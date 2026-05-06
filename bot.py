@@ -218,7 +218,7 @@ async def positions_cmd(interaction: discord.Interaction):
 
     embed = discord.Embed(
         title="📊 All Open Positions",
-        description="\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n".join(lines),
+        description="\n\u200b\n".join(lines),
         color=0x2B2D31,
         timestamp=datetime.utcnow()
     )
